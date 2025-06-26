@@ -423,8 +423,9 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
                 pdf.set_draw_color(220, 220, 220)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
 
-    pdf.output(pdf_buffer)
-    pdf_buffer.seek(0)
+        pdf_bytes = pdf.output(dest='S').encode('latin1')
+        pdf_buffer.write(pdf_bytes)
+        pdf_buffer.seek(0)
 
 # ---- STREAMLIT UI ----
 st.title("Variance Audit Tool")
