@@ -7,7 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1NaFmctBEdr2aatIJK1fHQ9pIbu3Xn-0Z
 """
 
-pip install streamlit fpdf
 
 
 import streamlit as st
