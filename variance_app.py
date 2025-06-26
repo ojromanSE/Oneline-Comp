@@ -1,14 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import io
-import tempfile
-import os
 from fpdf import FPDF
+import io
+import matplotlib.pyplot as plt
 
-# --- GLOBALS ---
-LOGO_PATH = "SE_LOGO.png"
+st.set_page_config(page_title="Variance Audit Tool", layout="wide")
+
 MAIN_METRICS = [
     "Net Res Oil (Mbbl)",
     "Net Res Gas (MMcf)",
@@ -20,22 +18,15 @@ MAIN_METRICS = [
     "BFIT Payout (years)",
 ]
 
-# --- PDF CLASS ---
 class PDFWithPageNumbers(FPDF):
-    def __init__(self, logo_path=None):
+    def __init__(self):
         super().__init__()
-        self.logo_path = logo_path
+
     def footer(self):
         self.set_y(-15)
         self.set_font("Times", "I", 8)
         self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
-        if self.logo_path and os.path.exists(self.logo_path):
-            logo_width = 12
-            x_position = self.w - self.r_margin - logo_width
-            y_position = self.h - 15
-            self.image(self.logo_path, x=x_position, y=y_position, w=logo_width)
 
-# --- UTILS ---
 def load_oneline(file):
     df = pd.read_excel(file, sheet_name="Oneline")
     df.columns = df.columns.str.strip()
@@ -144,7 +135,21 @@ def plot_top_contributors(variance_df, metric, top_n=10):
     plt.tight_layout()
     return fig
 
-def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_df, nri_df):
+def add_chart_to_pdf(pdf, fig, title=""):
+    import tempfile
+    import matplotlib.pyplot as plt
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
+        fig.savefig(tmpfile.name, bbox_inches='tight', dpi=150)
+        plt.close(fig)
+        pdf.add_page()
+        if title:
+            pdf.set_font("Times", style="B", size=14)
+            pdf.cell(0, 12, title, ln=True, align='C')
+            pdf.ln(4)
+        pdf.image(tmpfile.name, x=15, w=180)
+        os.unlink(tmpfile.name)
+
+def generate_excel(variance_df, output_excel, npv_column, filtered_wells_df, begin_df, final_df, nri_df):
     variance_columns = [
         "Net Total Revenue ($) Variance", "Net Operating Expense ($) Variance",
         "Inital Approx WI Variance", "Initial Approx NRI Variance",
@@ -160,8 +165,7 @@ def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_d
     removed_wells = begin_df[begin_df["PROPNUM"].isin(begin_propnumbers - final_propnumbers)]
     added_wells['NPV'] = added_wells.get(f"{npv_column}_final", np.nan)
     removed_wells['NPV'] = removed_wells.get(f"{npv_column}_begin", np.nan)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(output_excel) as writer:
         filtered_df.to_excel(writer, sheet_name="Variance Summary", index=False)
         filtered_wells_df[["PROPNUM", "LEASE_NAME"]].to_excel(writer, sheet_name="Wells with Negative or Zero NPV", index=False)
         added_wells[["PROPNUM", "LEASE_NAME", "NPV"]].to_excel(writer, sheet_name="Added Wells", index=False)
@@ -169,23 +173,22 @@ def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_d
         nri_df[["PROPNUM", "LEASE_NAME", "NRI/WI Ratio Begin", "NRI/WI Ratio Final", "Outlier Source"]].to_excel(
             writer, sheet_name="Lease NRI", index=False
         )
-    output.seek(0)
-    return output
+        # Add top contributors for each metric
+        for metric in MAIN_METRICS + [npv_column]:
+            col = f"{metric} Variance"
+            if col in variance_df.columns:
+                temp_df = variance_df[["PROPNUM", "LEASE_NAME", col]].dropna().copy()
+                temp_df = temp_df[temp_df[col] != 0].sort_values(by=col, ascending=False)
+                if not temp_df.empty:
+                    top_pos = temp_df.head(10)
+                    top_neg = temp_df.tail(10)
+                    combined = pd.concat([top_pos, top_neg])
+                    combined.to_excel(writer, sheet_name=f"Top {metric} Contributors", index=False)
+    output_excel.seek(0)
+    return output_excel
 
-def add_chart_to_pdf(pdf, fig, title=""):
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
-        fig.savefig(tmpfile.name, bbox_inches='tight', dpi=150)
-        plt.close(fig)
-        pdf.add_page()
-        if title:
-            pdf.set_font("Times", style="B", size=14)
-            pdf.cell(0, 12, title, ln=True, align='C')
-            pdf.ln(4)
-        pdf.image(tmpfile.name, x=15, w=180)
-        os.unlink(tmpfile.name)
-
-def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
-    pdf = PDFWithPageNumbers(logo_path=LOGO_PATH if os.path.exists(LOGO_PATH) else None)
+def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
+    pdf = PDFWithPageNumbers()
     variance_df_backup = variance_df.copy()
     variance_df = variance_df.merge(explanation_df, on=["PROPNUM", "LEASE_NAME"], how="left")
     for col in ['SE_RSV_CAT_begin', 'SE_RSV_CAT_final']:
@@ -217,6 +220,7 @@ def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
     value_width = 26
     line_height = 5
     bottom_margin = 15
+
     def check_page_break(pdf, needed_height):
         if pdf.get_y() + needed_height > pdf.h - bottom_margin:
             pdf.add_page()
@@ -229,6 +233,7 @@ def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.set_font("Times", size=10)
+
     def check_outlier_page_break(pdf, needed_height):
         begin_width = 30
         final_width = 30
@@ -243,6 +248,7 @@ def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.set_font("Times", size=10)
+
     # 1. Collect Plots
     metric_figs = []
     metric_order = [m for m in MAIN_METRICS if m != npv_column]
@@ -251,6 +257,7 @@ def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
         fig = plot_top_contributors(variance_df, metric)
         if fig:
             metric_figs.append((metric, fig))
+
     # 2. Write all summaries first
     for category in categories:
         pdf.add_page()
@@ -322,7 +329,7 @@ def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
     # 4. Add remaining metric plots in order
     for metric, fig in metric_figs:
         add_chart_to_pdf(pdf, fig, title=f"Top Contributors to {metric} Change")
-    # 5. Add rest: transitions and NRI outlier pages for all categories
+    # 5. Now add the rest: transitions and NRI outlier pages for all categories
     for category in categories:
         pdf.add_page()
         pdf.set_font("Times", style="B", size=14)
@@ -378,59 +385,70 @@ def generate_pdf(variance_df, output_pdf, npv_column, explanation_df, nri_df):
                 pdf.ln(row_height)
                 pdf.set_draw_color(220, 220, 220)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.output(output_pdf)
+    pdf_bytes = io.BytesIO()
+    pdf.output(pdf_bytes)
+    pdf_bytes.seek(0)
+    return pdf_bytes
 
-# --- STREAMLIT APP ---
-def main():
-    st.title("Variance Audit Tool")
-    st.markdown("Upload BEGIN and FINAL Excel files. Choose NPV column and generate reports.")
-    begin_file = st.file_uploader("Upload BEGIN Excel file (.xlsx)", type=["xlsx"])
-    final_file = st.file_uploader("Upload FINAL Excel file (.xlsx)", type=["xlsx"])
-    logo_file = st.file_uploader("Optional: Upload your logo", type=["png", "jpg", "jpeg"])
-    npv_options = ["NPV at 9%", "NPV at 10%"]
-    npv_column = st.selectbox("Select NPV column", npv_options)
-    if logo_file:
-        with open(LOGO_PATH, "wb") as f:
-            f.write(logo_file.getbuffer())
-    if begin_file and final_file and npv_column:
-        if st.button("Generate Reports"):
-            with st.spinner("Processing..."):
-                begin_df = load_oneline(begin_file)
-                final_df = load_oneline(final_file)
-                begin_df_s = suffix_columns(begin_df, "_begin")
-                final_df_s = suffix_columns(final_df, "_final")
-                variance_df = begin_df_s.merge(final_df_s, on=["PROPNUM", "LEASE_NAME"], how="outer")
-                for col in ['SE_RSV_CAT_begin', 'SE_RSV_CAT_final']:
-                    if col not in variance_df.columns:
-                        variance_df[col] = 'Unknown'
-                variance_df['Reserve Category Begin'] = variance_df['SE_RSV_CAT_begin']
-                variance_df['Reserve Category Final'] = variance_df['SE_RSV_CAT_final']
-                key_columns = [
-                    "Net Total Revenue ($)", "Net Operating Expense ($)", "Inital Approx WI", "Initial Approx NRI",
-                    "Net Res Oil (Mbbl)", "Net Res Gas (MMcf)", "Net Capex ($)", "Net Res NGL (Mbbl)", npv_column
-                ]
-                for col in key_columns:
-                    col_begin = f"{col}_begin"
-                    col_final = f"{col}_final"
-                    if col_begin in variance_df.columns and col_final in variance_df.columns:
-                        variance_df[f"{col} Variance"] = variance_df[col_final] - variance_df[col_begin]
-                explanation_df = generate_explanations(variance_df, npv_column)
-                negative_npv_wells = identify_negative_npv_wells(variance_df, npv_column)
-                nri_df = calculate_nri_wi_ratio(begin_df_s, final_df_s)
-                # Excel
-                excel_bytesio = generate_excel(variance_df, npv_column, negative_npv_wells, begin_df_s, final_df_s, nri_df)
-                st.download_button("Download Excel Report", excel_bytesio, "variance_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                # PDF
-                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmpfile:
-                    generate_pdf(variance_df, tmpfile.name, npv_column, explanation_df, nri_df)
-                    tmpfile.seek(0)
-                    pdf_bytes = tmpfile.read()
-                st.download_button("Download PDF Report", pdf_bytes, "variance_report.pdf", mime="application/pdf")
-                # Show plots
-                st.subheader("Top Contributors Plots")
-                for metric in MAIN_METRICS + [npv_column]:
-                    fig = plot_top_contributors(variance_df, metric)
-                    if fig:
-                        st.pyplot(fig)
-if __name__ == "__main__":
-    main()
+# Streamlit UI
+st.title("Variance Audit Tool")
+st.write("Upload BEGIN and FINAL Excel files. Choose NPV column and generate reports.")
+
+begin_file = st.file_uploader("Upload BEGIN Excel file (.xlsx)", type=["xlsx"])
+final_file = st.file_uploader("Upload FINAL Excel file (.xlsx)", type=["xlsx"])
+
+npv_column = st.selectbox("Select NPV column", ["NPV at 9%", "NPV at 10%"])
+
+# Main logic wrapped in a Generate button, only processes when clicked.
+if st.button("Generate Reports"):
+    if not begin_file or not final_file:
+        st.error("Please upload both BEGIN and FINAL Excel files.")
+    else:
+        # 1. Load and process data
+        begin_df = load_oneline(begin_file)
+        final_df = load_oneline(final_file)
+        begin_df_s = suffix_columns(begin_df, "_begin")
+        final_df_s = suffix_columns(final_df, "_final")
+        begin_df_s.columns = begin_df_s.columns.str.strip()
+        final_df_s.columns = final_df_s.columns.str.strip()
+        variance_df = begin_df_s.merge(final_df_s, on=["PROPNUM", "LEASE_NAME"], how="outer")
+        for col in ['SE_RSV_CAT_begin', 'SE_RSV_CAT_final']:
+            if col not in variance_df.columns:
+                variance_df[col] = 'Unknown'
+        variance_df['Reserve Category Begin'] = variance_df['SE_RSV_CAT_begin']
+        variance_df['Reserve Category Final'] = variance_df['SE_RSV_CAT_final']
+        key_columns = [
+            "Net Total Revenue ($)", "Net Operating Expense ($)", "Inital Approx WI", "Initial Approx NRI",
+            "Net Res Oil (Mbbl)", "Net Res Gas (MMcf)", "Net Capex ($)", "Net Res NGL (Mbbl)", npv_column
+        ]
+        for col in key_columns:
+            col_begin = f"{col}_begin"
+            col_final = f"{col}_final"
+            if col_begin in variance_df.columns and col_final in variance_df.columns:
+                variance_df[f"{col} Variance"] = variance_df[col_final] - variance_df[col_begin]
+        explanation_df = generate_explanations(variance_df, npv_column)
+        negative_npv_wells = identify_negative_npv_wells(variance_df, npv_column)
+        nri_df = calculate_nri_wi_ratio(begin_df_s, final_df_s)
+        # 2. Save Excel to buffer
+        excel_buffer = io.BytesIO()
+        generate_excel(variance_df, excel_buffer, npv_column, negative_npv_wells, begin_df_s, final_df_s, nri_df)
+        st.session_state['excel_report'] = excel_buffer.getvalue()
+        # 3. Save PDF to buffer
+        pdf_buffer = generate_pdf(variance_df, npv_column, explanation_df, nri_df)
+        st.session_state['pdf_report'] = pdf_buffer.getvalue()
+        st.success("Reports generated! Use the buttons below to download your reports.")
+
+# Persistent download buttons
+if 'excel_report' in st.session_state and 'pdf_report' in st.session_state:
+    st.download_button(
+        "Download Excel Report",
+        st.session_state['excel_report'],
+        file_name="variance_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    st.download_button(
+        "Download PDF Report",
+        st.session_state['pdf_report'],
+        file_name="variance_report.pdf",
+        mime="application/pdf"
+    )
