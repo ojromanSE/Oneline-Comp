@@ -49,11 +49,21 @@ class PDFWithPageNumbers(FPDF):
 
 # ==== HELPER FUNCTIONS ====
 def load_oneline(file):
-    df = pd.read_excel(file, sheet_name="Oneline")
+    # Get the list of sheet names first
+    xl = pd.ExcelFile(file)
+    sheet_names = xl.sheet_names
+    if "Oneline" not in sheet_names:
+        raise ValueError(f"Excel file does not contain a sheet named 'Oneline'. Found sheets: {sheet_names}")
+    df = xl.parse("Oneline")
     df.columns = df.columns.str.strip()
+    # Validate required columns
+    for required in ['PROPNUM', 'LEASE_NAME']:
+        if required not in df.columns:
+            raise ValueError(f"Sheet 'Oneline' must contain column '{required}'. Columns found: {list(df.columns)}")
     if 'SE_RSV_CAT' not in df.columns:
         df['SE_RSV_CAT'] = 'Unknown'
     return df
+
 
 def suffix_columns(df, suffix, ignore_cols=["PROPNUM", "LEASE_NAME"]):
     return df.rename(columns={col: f"{col}{suffix}" for col in df.columns if col not in ignore_cols})
