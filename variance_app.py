@@ -171,6 +171,7 @@ def plot_top_contributors(variance_df, metric, top_n=10):
     return fig
 
 
+
 def add_chart_to_pdf(pdf, fig, title=""):
     import tempfile
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
