@@ -4,11 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from fpdf import FPDF
 import io
+import zipfile
 import tempfile
 
 # --- CONSTANTS ---
 MAIN_METRICS = [
-    # PV will be appended dynamically (npv_column)
     "Net Res Oil (Mbbl)",
     "Net Res Gas (MMcf)",
     "Net Res NGL (Mbbl)",
@@ -19,17 +19,14 @@ MAIN_METRICS = [
     "BFIT Payout (years)",
 ]
 
-# --- PDF CLASS ---
 class PDFWithPageNumbers(FPDF):
     def __init__(self):
         super().__init__()
-
     def footer(self):
         self.set_y(-15)
         self.set_font("Times", "I", 8)
         self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
 
-# --- UTILS ---
 def load_oneline(file):
     df = pd.read_excel(file, sheet_name="Oneline")
     df.columns = df.columns.str.strip()
@@ -139,7 +136,6 @@ def plot_top_contributors(variance_df, metric, top_n=10):
     return fig
 
 def add_chart_to_pdf(pdf, fig, title=""):
-    import matplotlib.pyplot as plt
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
         fig.savefig(tmpfile.name, bbox_inches='tight', dpi=150)
         plt.close(fig)
@@ -149,7 +145,6 @@ def add_chart_to_pdf(pdf, fig, title=""):
             pdf.cell(0, 12, title, ln=True, align='C')
             pdf.ln(4)
         pdf.image(tmpfile.name, x=15, w=180)
-        # Delete temp file
         import os
         os.unlink(tmpfile.name)
 
@@ -177,7 +172,6 @@ def generate_excel(variance_df, excel_buffer, npv_column, filtered_wells_df, beg
         nri_df[["PROPNUM", "LEASE_NAME", "NRI/WI Ratio Begin", "NRI/WI Ratio Final", "Outlier Source"]].to_excel(
             writer, sheet_name="Lease NRI", index=False
         )
-        # Top contributors: trim to <=31 chars for Excel limit
         for metric in MAIN_METRICS + [npv_column]:
             col = f"{metric} Variance"
             if col in variance_df.columns:
@@ -255,7 +249,6 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.set_font("Times", size=10)
 
-    # --- 1. Collect Plots ---
     metric_figs = []
     metric_order = [m for m in MAIN_METRICS if m != npv_column]
     npv_fig = plot_top_contributors(variance_df, npv_column)
@@ -263,8 +256,6 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
         fig = plot_top_contributors(variance_df, metric)
         if fig:
             metric_figs.append((metric, fig))
-
-    # --- 2. Write all summaries first (keeps all summary tables first) ---
     for category in categories:
         pdf.add_page()
         pdf.set_font("Times", style="B", size=14)
@@ -329,13 +320,10 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
                 pdf.set_draw_color(220, 220, 220)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(1)
-    # --- 3. Add NPV plot as second page ---
     if npv_fig:
         add_chart_to_pdf(pdf, npv_fig, title=f"Top Contributors to {npv_column} Change")
-    # --- 4. Add remaining metric plots in order ---
     for metric, fig in metric_figs:
         add_chart_to_pdf(pdf, fig, title=f"Top Contributors to {metric} Change")
-    # --- 5. Now add the rest: transitions and NRI outlier pages for all categories ---
     for category in categories:
         pdf.add_page()
         pdf.set_font("Times", style="B", size=14)
@@ -354,7 +342,6 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(220, 220, 220)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(1)
-        # NRI/WI Ratio Outliers
         nri_outliers_category = nri_df[nri_df["PROPNUM"].isin(category_df["PROPNUM"])]
         if not nri_outliers_category.empty:
             pdf.set_font("Times", style="B", size=12)
@@ -396,24 +383,17 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
     pdf_buffer.seek(0)
 
 # --- STREAMLIT APP ---
-
 st.title("Variance Audit Tool")
-
 st.write("Upload BEGIN and FINAL Excel files. Choose NPV column and generate reports.")
 
-# --- File uploaders
 begin_file = st.file_uploader("Upload BEGIN Excel file (.xlsx)", type=["xlsx"], key="begin")
 final_file = st.file_uploader("Upload FINAL Excel file (.xlsx)", type=["xlsx"], key="final")
 
-# NPV options: will be filled after file upload
 npv_options = ["NPV at 9%", "NPV at 10%"]
 npv_column = st.selectbox("Select NPV column", npv_options)
 
-# --- Process and keep reports in session state
-if 'excel_bytes' not in st.session_state:
-    st.session_state['excel_bytes'] = None
-if 'pdf_bytes' not in st.session_state:
-    st.session_state['pdf_bytes'] = None
+if 'zip_bytes' not in st.session_state:
+    st.session_state['zip_bytes'] = None
 
 if st.button("Generate Reports"):
     if begin_file is None or final_file is None:
@@ -443,31 +423,26 @@ if st.button("Generate Reports"):
         explanation_df = generate_explanations(variance_df, npv_column)
         negative_npv_wells = identify_negative_npv_wells(variance_df, npv_column)
         nri_df = calculate_nri_wi_ratio(begin_df_s, final_df_s)
-        # --- Excel
+        # --- Generate Excel
         excel_buffer = io.BytesIO()
         generate_excel(variance_df, excel_buffer, npv_column, negative_npv_wells, begin_df_s, final_df_s, nri_df)
-        st.session_state['excel_bytes'] = excel_buffer.getvalue()
-        # --- PDF
+        # --- Generate PDF
         pdf_buffer = io.BytesIO()
         generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df)
-        st.session_state['pdf_bytes'] = pdf_buffer.getvalue()
+        # --- Make ZIP
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            zf.writestr("variance_report.xlsx", excel_buffer.getvalue())
+            zf.writestr("variance_report.pdf", pdf_buffer.getvalue())
+        zip_buffer.seek(0)
+        st.session_state['zip_bytes'] = zip_buffer.getvalue()
         st.success("Reports generated! Scroll down to download.")
 
-# --- Show download buttons if available ---
-if st.session_state.get('excel_bytes') and st.session_state.get('pdf_bytes'):
-    st.header("Download Reports")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            label="Download Excel Report",
-            data=st.session_state['excel_bytes'],
-            file_name="variance_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    with col2:
-        st.download_button(
-            label="Download PDF Report",
-            data=st.session_state['pdf_bytes'],
-            file_name="variance_report.pdf",
-            mime="application/pdf"
-        )
+if st.session_state.get('zip_bytes'):
+    st.header("Download All Reports")
+    st.download_button(
+        label="Download Excel & PDF Reports (ZIP)",
+        data=st.session_state['zip_bytes'],
+        file_name="variance_reports.zip",
+        mime="application/zip"
+    )
