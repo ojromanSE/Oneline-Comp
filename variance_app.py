@@ -67,45 +67,58 @@ def calculate_nri_wi_ratio(begin_df, final_df):
 # ==== EXPLANATIONS ====
 def generate_explanations(var_df, npv_col):
     METRICS = MAIN_METRICS + [npv_col]
-    rows=[]
-    for _,r in var_df.iterrows():
-        drivers=[]
+    rows = []
+    for _, r in var_df.iterrows():
+        drivers = []
+        # 1) Collect Δ and % for every metric
         for m in METRICS:
-            b,c = f"{m}_begin", f"{m}_final"
-            if b in r and c in r:
-                vb, vf = r[b], r[c]
-                if pd.notna(vb) and vb!=0 and pd.notna(vf):
-                    delta = vf-vb
-                    pct   = delta/abs(vb)*100
-                    drivers.append((m,delta,pct))
+            b, f = f"{m}_begin", f"{m}_final"
+            if b in r and f in r:
+                vb, vf = r[b], r[f]
+                if pd.notna(vb) and vb != 0 and pd.notna(vf):
+                    delta = vf - vb
+                    pct   = delta / abs(vb) * 100
+                    drivers.append((m, delta, pct))
+
         if not drivers:
-            rows.append(dict(
-                PROPNUM=r["PROPNUM"],
-                LEASE_NAME=r["LEASE_NAME"],
-                **{"Key Metric":"","Variance Value":0,"Explanation":""}
-            ))
+            # no change or missing → empty explanation
+            rows.append({
+                "PROPNUM": r["PROPNUM"],
+                "LEASE_NAME": r["LEASE_NAME"],
+                "Key Metric": "",
+                "Variance Value": 0,
+                "Explanation": ""
+            })
             continue
-        # top3 by absolute % change
-        top3 = sorted(drivers, key=lambda x:abs(x[2]), reverse=True)[:3]
-        # #1 for Key Metric col
-        km,kv,_ = top3[0]
-        # build explanation phrases
-        parts=[]
-        for m,d,p in top3:
-            sign = "increased" if d>0 else "decreased"
+
+        # 2) pick top 3 by absolute % change
+        top3 = sorted(drivers, key=lambda x: abs(x[2]), reverse=True)[:3]
+        # #1 for Key Metric / Variance Value
+        km, kv, _ = top3[0]
+
+        # 3) build the semicolon‐separated text, with no decimals anywhere
+        parts = []
+        for m, d, p in top3:
+            sign = "increased" if d > 0 else "decreased"
+            # Monetary or NPV metrics get a leading $
             if m.endswith("$") or "NPV" in m:
-                parts.append(f"{m} {sign} by ${abs(d):,.0f} ({p:.1f}%)")
-            elif "Res" in m or "Mbbl" in m or "MMcf" in m:
-                parts.append(f"{m} {sign} by {abs(d):,.2f} ({p:.1f}%)")
+                parts.append(f"{m} {sign} by ${abs(d):,.0f} ({p:.0f}%)")
             else:
-                parts.append(f"{m} {sign} by {abs(d):.2f} ({p:.1f}%)")
-        expl = "; ".join(parts)+"."
-        rows.append(dict(
-            PROPNUM=r["PROPNUM"],
-            LEASE_NAME=r["LEASE_NAME"],
-            **{"Key Metric":km,"Variance Value":kv,"Explanation":expl}
-        ))
+                # units like Mbbl or MMcf are part of m already
+                parts.append(f"{m} {sign} by {abs(d):,.0f} ({p:.0f}%)")
+
+        explanation = "; ".join(parts) + "."
+
+        rows.append({
+            "PROPNUM": r["PROPNUM"],
+            "LEASE_NAME": r["LEASE_NAME"],
+            "Key Metric": km,
+            "Variance Value": kv,
+            "Explanation": explanation
+        })
+
     return pd.DataFrame(rows)
+
 
 # ==== PLOTTING ====
 def plot_top_contributors(variance_df, metric, top_n=10):
