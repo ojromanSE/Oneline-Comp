@@ -2,12 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
 from fpdf import FPDF
 import io
 import zipfile
 import tempfile
 
-# --- CONSTANTS ---
+# --- Set Garamond globally for plots ---
+matplotlib.rcParams['font.family'] = 'Garamond'
+
 MAIN_METRICS = [
     "Net Res Oil (Mbbl)",
     "Net Res Gas (MMcf)",
@@ -19,12 +22,15 @@ MAIN_METRICS = [
     "BFIT Payout (years)",
 ]
 
+# --- FPDF class with Garamond font (fallbacks to Times if not available) ---
 class PDFWithPageNumbers(FPDF):
     def __init__(self):
         super().__init__()
+        self.add_font('Garamond', '', '', uni=True)  # Will try to use system font
+
     def footer(self):
         self.set_y(-15)
-        self.set_font("Times", "I", 8)
+        self.set_font("Garamond", "I", 8)
         self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
 
 def load_oneline(file):
@@ -129,9 +135,11 @@ def plot_top_contributors(variance_df, metric, top_n=10):
     fig, ax = plt.subplots(figsize=(8, max(6, 0.5*len(combined))))
     colors = ['#D9534F' if v < 0 else '#5CB85C' for v in values]
     ax.barh(labels, values, color=colors)
-    ax.set_xlabel(f"Change in {metric}")
-    ax.set_ylabel("Well (PROPNUM / LEASE_NAME)")
-    ax.set_title(f"Top Contributors to {metric} Change")
+    ax.set_xlabel(f"Change in {metric}", fontname='Garamond')
+    ax.set_ylabel("Well (PROPNUM / LEASE_NAME)", fontname='Garamond')
+    ax.set_title(f"Top Contributors to {metric} Change", fontname='Garamond')
+    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+        label.set_fontname('Garamond')
     plt.tight_layout()
     return fig
 
@@ -141,7 +149,7 @@ def add_chart_to_pdf(pdf, fig, title=""):
         plt.close(fig)
         pdf.add_page()
         if title:
-            pdf.set_font("Times", style="B", size=14)
+            pdf.set_font("Garamond", style="B", size=14)
             pdf.cell(0, 12, title, ln=True, align='C')
             pdf.ln(4)
         pdf.image(tmpfile.name, x=15, w=180)
@@ -189,6 +197,10 @@ def generate_excel(variance_df, excel_buffer, npv_column, filtered_wells_df, beg
 
 def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
     pdf = PDFWithPageNumbers()
+    try:
+        pdf.set_font("Garamond", "", 10)
+    except:
+        pdf.set_font("Times", "", 10)
     variance_df_backup = variance_df.copy()
     variance_df = variance_df.merge(explanation_df, on=["PROPNUM", "LEASE_NAME"], how="left")
     for col in ['SE_RSV_CAT_begin', 'SE_RSV_CAT_final']:
@@ -224,7 +236,10 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
     def check_page_break(pdf, needed_height):
         if pdf.get_y() + needed_height > pdf.h - bottom_margin:
             pdf.add_page()
-            pdf.set_font("Times", style="B", size=11)
+            try:
+                pdf.set_font("Garamond", style="B", size=11)
+            except:
+                pdf.set_font("Times", style="B", size=11)
             pdf.cell(prop_lease_width, 8, "PROPNUM / LEASE_NAME")
             pdf.cell(cat_width, 8, "Begin Cat")
             pdf.cell(cat_width, 8, "Final Cat")
@@ -232,36 +247,24 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
             pdf.cell(0, 8, "Explanation", ln=True)
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            pdf.set_font("Times", size=10)
+            try:
+                pdf.set_font("Garamond", size=10)
+            except:
+                pdf.set_font("Times", size=10)
 
-    def check_outlier_page_break(pdf, needed_height):
-        begin_width = 30
-        final_width = 30
-        outlier_width = 30
-        if pdf.get_y() + needed_height > pdf.h - bottom_margin:
-            pdf.add_page()
-            pdf.set_font("Times", style="B", size=11)
-            pdf.cell(prop_lease_width, 8, "PROPNUM / LEASE_NAME")
-            pdf.cell(begin_width, 8, "Begin Ratio")
-            pdf.cell(final_width, 8, "Final Ratio")
-            pdf.cell(outlier_width, 8, "Outlier In", ln=True)
-            pdf.set_draw_color(200, 200, 200)
-            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            pdf.set_font("Times", size=10)
-
-    metric_figs = []
-    metric_order = [m for m in MAIN_METRICS if m != npv_column]
-    npv_fig = plot_top_contributors(variance_df, npv_column)
-    for metric in metric_order:
-        fig = plot_top_contributors(variance_df, metric)
-        if fig:
-            metric_figs.append((metric, fig))
+    # --- Only update this section for font and value change format! ---
     for category in categories:
         pdf.add_page()
-        pdf.set_font("Times", style="B", size=14)
+        try:
+            pdf.set_font("Garamond", style="B", size=14)
+        except:
+            pdf.set_font("Times", style="B", size=14)
         pdf.cell(0, 10, f"Variance Summary for {category}", ln=True, align='C')
         pdf.ln(2)
-        pdf.set_font("Times", size=11)
+        try:
+            pdf.set_font("Garamond", size=11)
+        except:
+            pdf.set_font("Times", size=11)
         category_df = variance_df[
             (variance_df["SE_RSV_CAT_begin"] == category) | (variance_df["SE_RSV_CAT_final"] == category)
         ]
@@ -273,7 +276,10 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
         for line in summary_lines:
             pdf.cell(0, 8, line, ln=True)
         pdf.ln(4)
-        pdf.set_font("Times", style="B", size=11)
+        try:
+            pdf.set_font("Garamond", style="B", size=11)
+        except:
+            pdf.set_font("Times", style="B", size=11)
         pdf.cell(prop_lease_width, 8, "PROPNUM / LEASE_NAME")
         pdf.cell(cat_width, 8, "Begin Cat")
         pdf.cell(cat_width, 8, "Final Cat")
@@ -281,7 +287,10 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
         pdf.cell(0, 8, "Explanation", ln=True)
         pdf.set_draw_color(200, 200, 200)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-        pdf.set_font("Times", size=10)
+        try:
+            pdf.set_font("Garamond", size=10)
+        except:
+            pdf.set_font("Times", size=10)
         if not category_df.empty:
             major_changes = category_df[
                 category_df[f"{npv_column} Variance"].abs() > category_df[f"{npv_column} Variance"].abs().quantile(0.95)
@@ -290,8 +299,9 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
                 value = row["Variance Value"]
                 metric = row["Key Metric"]
                 explanation = row["Explanation"]
+                # --- Value change format: remove decimals ---
                 if "Revenue" in metric or "$" in metric or "Capex" in metric or metric == npv_column:
-                    val_str = f"${value:,.2f}"
+                    val_str = f"${int(round(value)):,}"
                 elif "Oil" in metric:
                     val_str = f"{value:,.2f} Mbbl"
                 elif "Gas" in metric:
@@ -320,18 +330,36 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
                 pdf.set_draw_color(220, 220, 220)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(1)
+    # NPV and other plots after the summary page...
+    npv_fig = plot_top_contributors(variance_df, npv_column)
+    metric_figs = []
+    for metric in MAIN_METRICS:
+        if metric != npv_column:
+            fig = plot_top_contributors(variance_df, metric)
+            if fig:
+                metric_figs.append((metric, fig))
     if npv_fig:
         add_chart_to_pdf(pdf, npv_fig, title=f"Top Contributors to {npv_column} Change")
     for metric, fig in metric_figs:
         add_chart_to_pdf(pdf, fig, title=f"Top Contributors to {metric} Change")
+    # transitions/outliers...
     for category in categories:
         pdf.add_page()
-        pdf.set_font("Times", style="B", size=14)
+        try:
+            pdf.set_font("Garamond", style="B", size=14)
+        except:
+            pdf.set_font("Times", style="B", size=14)
         pdf.cell(0, 10, f"Transitions and Outliers for {category}", ln=True, align='C')
         pdf.ln(2)
-        pdf.set_font("Times", size=12)
+        try:
+            pdf.set_font("Garamond", size=12)
+        except:
+            pdf.set_font("Times", size=12)
         pdf.cell(0, 10, "Wells that Changed Reserve Category:", ln=True)
-        pdf.set_font("Times", size=10)
+        try:
+            pdf.set_font("Garamond", size=10)
+        except:
+            pdf.set_font("Times", size=10)
         category_df = variance_df[
             (variance_df["SE_RSV_CAT_begin"] == category) | (variance_df["SE_RSV_CAT_final"] == category)
         ]
@@ -344,10 +372,16 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
             pdf.ln(1)
         nri_outliers_category = nri_df[nri_df["PROPNUM"].isin(category_df["PROPNUM"])]
         if not nri_outliers_category.empty:
-            pdf.set_font("Times", style="B", size=12)
+            try:
+                pdf.set_font("Garamond", style="B", size=12)
+            except:
+                pdf.set_font("Times", style="B", size=12)
             pdf.cell(0, 10, f"NRI/WI Ratio Outliers for {category}", ln=True, align='C')
             pdf.ln(2)
-            pdf.set_font("Times", style="B", size=11)
+            try:
+                pdf.set_font("Garamond", style="B", size=11)
+            except:
+                pdf.set_font("Times", style="B", size=11)
             begin_width = 30
             final_width = 30
             outlier_width = 30
@@ -357,7 +391,10 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
             pdf.cell(outlier_width, 8, "Outlier In", ln=True)
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            pdf.set_font("Times", size=10)
+            try:
+                pdf.set_font("Garamond", size=10)
+            except:
+                pdf.set_font("Times", size=10)
             for _, row in nri_outliers_category.iterrows():
                 begin_ratio = row.get("NRI/WI Ratio Begin", None)
                 final_ratio = row.get("NRI/WI Ratio Final", None)
@@ -367,7 +404,6 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
                 well_text = well_id + "\n" + lease_name
                 well_lines = len(pdf.multi_cell(60, line_height, well_text, border=0, align='L', split_only=True))
                 row_height = line_height * well_lines
-                check_outlier_page_break(pdf, row_height)
                 x = pdf.get_x()
                 y = pdf.get_y()
                 pdf.multi_cell(60, line_height, well_text, border=0, align='L')
