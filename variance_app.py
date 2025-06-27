@@ -132,17 +132,25 @@ def plot_top_contributors(variance_df, metric, top_n=10):
     plt.tight_layout()
     return fig
 
+from io import BytesIO
+
 def add_chart_to_pdf(pdf, fig, title=""):
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
-        fig.savefig(tmpfile.name, bbox_inches='tight', dpi=150)
-        plt.close(fig)
-        pdf.add_page()
-        pdf.set_font(DEFAULT_FONT, style="B", size=14)
-        if title:
-            pdf.cell(0, 12, title, ln=True, align='C')
-            pdf.ln(4)
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches='tight', dpi=150)
+    buf.seek(0)
+    plt.close(fig)
+    pdf.add_page()
+    if title:
+        pdf.set_font("Times", style="B", size=14)
+        pdf.cell(0, 12, title, ln=True, align='C')
+        pdf.ln(4)
+    # FPDF requires a filename, so we have to save buffer to a temporary file
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmpfile:
+        tmpfile.write(buf.read())
+        tmpfile.flush()
         pdf.image(tmpfile.name, x=15, w=180)
-        os.unlink(tmpfile.name)
+
 
 def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_df, nri_df):
     variance_columns = [
