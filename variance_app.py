@@ -196,7 +196,6 @@ def add_chart_to_pdf(pdf, fig, title=""):
         os.unlink(tmpfile.name)
 
 def generate_excel(variance_df, excel_buffer, npv_column, filtered_wells_df, begin_df, final_df, nri_df):
-    # 1) The only columns we will ever put in the variance summary:
     variance_columns = [
         "Net Total Revenue ($) Variance",
         "Net Operating Expense ($) Variance",
@@ -209,59 +208,51 @@ def generate_excel(variance_df, excel_buffer, npv_column, filtered_wells_df, beg
         "Reserve Category Final",
     ]
 
-    # 2) Build the strip-down DataFrame
-    filtered_df = variance_df[["PROPNUM", "LEASE_NAME"] + variance_columns]
+    filtered_df = variance_df[["PROPNUM", "LEASE_NAME"] + variance_columns]\
+                  .sort_values(by=[f"{npv_column} Variance"], ascending=False)
 
-    # 3) Sort however you like (e.g. by NPV variance desc)
-    filtered_df = filtered_df.sort_values(
-        by=[f"{npv_column} Variance"], ascending=False
-    )
-
-    # 4) Prepare your helper tables
-    #    (using the same logic you already have)
     begin_props = set(begin_df["PROPNUM"])
     final_props = set(final_df["PROPNUM"])
-    added = final_df[final_df["PROPNUM"].isin(final_props - begin_props)]
-    removed = begin_df[begin_df["PROPNUM"].isin(begin_props - final_props)]
+    added   = final_df[final_df["PROPNUM"].isin(final_props - begin_props)].copy()
+    removed = begin_df[begin_df["PROPNUM"].isin(begin_props - final_props)].copy()
     added["NPV"]   = added.get(f"{npv_column}_final", np.nan)
     removed["NPV"] = removed.get(f"{npv_column}_begin",  np.nan)
 
-    # 5) Write only the sheets you actually need
     with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
-        # Variance summary
+        # 1. Variance summary
         filtered_df.to_excel(
             writer,
-            sheet_name="Variance Summary",
+            sheet_name="VarianceSummary",  # no spaces/slashes
             index=False
         )
 
-        # Negative‐or‐zero‐NPV wells
+        # 2. Negative or Zero NPV wells
         filtered_wells_df[["PROPNUM", "LEASE_NAME"]].to_excel(
             writer,
-            sheet_name="Neg/Zero NPV",
+            sheet_name="Neg_or_Zero_NPV",
             index=False
         )
 
-        # Added / Removed
+        # 3. Added / Removed wells
         added[["PROPNUM", "LEASE_NAME", "NPV"]].to_excel(
             writer,
-            sheet_name="Added Wells",
+            sheet_name="Added_Wells",
             index=False
         )
         removed[["PROPNUM", "LEASE_NAME", "NPV"]].to_excel(
             writer,
-            sheet_name="Removed Wells",
+            sheet_name="Removed_Wells",
             index=False
         )
 
-        # NRI/WI outliers
+        # 4. NRI/WI outliers
         nri_df[["PROPNUM", "LEASE_NAME", "NRI/WI Ratio Begin", "NRI/WI Ratio Final", "Outlier Source"]].to_excel(
             writer,
-            sheet_name="Lease NRI",
+            sheet_name="Lease_NRI",
             index=False
         )
 
-        # Top contributors sheets (same logic)
+        # 5. Top contributors (sheet names auto-trimmed to 31 chars)
         for metric in MAIN_METRICS + [npv_column]:
             col = f"{metric} Variance"
             if col in variance_df:
@@ -276,11 +267,10 @@ def generate_excel(variance_df, excel_buffer, npv_column, filtered_wells_df, beg
                     top_neg = tmp.tail(10)
                     combo  = pd.concat([top_pos, top_neg])
                     name   = f"Top {metric} Contributors"
-                    # shorten sheet-name if needed
-                    if len(name) > 31: name = name[:31]
-                    combo.to_excel(writer, sheet_name=name, index=False)
+                    # sanitize & trim to 31 chars:
+                    safe_name = name.replace("/", "_").replace(" ", "_")[:31]
+                    combo.to_excel(writer, sheet_name=safe_name, index=False)
 
-    # rewind so Streamlit can read it:
     excel_buffer.seek(0)
 
 
