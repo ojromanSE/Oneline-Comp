@@ -363,8 +363,9 @@ def generate_pdf(variance_df, pdf_buffer, npv_column, explanation_df, nri_df):
                 category_df[f"{npv_column} Variance"].abs() > category_df[f"{npv_column} Variance"].abs().quantile(0.95)
             ]
             for _, row in major_changes.iterrows():
-                value = row["Variance Value"]
-                metric = row["Key Metric"]
+                npv_var = row[f"{npv_column} Variance"]
+                # format it as dollars (no decimals, commas)
+                val_str = f"${int(round(npv_var)):,.0f}"
                 explanation = row["Explanation"]
                 # === Whole dollars only ===
                 if "Revenue" in metric or "$" in metric or "Capex" in metric or metric == npv_column:
