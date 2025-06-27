@@ -69,84 +69,79 @@ def suffix_columns(df, suffix, ignore_cols=["PROPNUM", "LEASE_NAME"]):
     return df.rename(columns={col: f"{col}{suffix}" for col in df.columns if col not in ignore_cols})
 
 def generate_explanations(variance_df, npv_column):
+    # All the metrics we care about:
+    METRICS = [
+        "Net Total Revenue ($)",
+        "Net Operating Expense ($)",
+        "Inital Approx WI",
+        "Net Res Oil (Mbbl)",
+        "Net Res Gas (MMcf)",
+        "Net Capex ($)",
+        "Net Res NGL (Mbbl)",
+        npv_column
+    ]
+
     explanations = []
     for _, row in variance_df.iterrows():
-        reason = []
-        thresholds = {
-            "Net Total Revenue ($)": 0.05,
-            "Net Operating Expense ($)": 0.05,
-            "Inital Approx WI": 0.05,
-            "Net Res Oil (Mbbl)": 0.05,
-            "Net Res Gas (MMcf)": 0.05,
-            "Net Capex ($)": 0.05,
-            "Net Res NGL (Mbbl)": 0.05,
-            npv_column: 0.05
-        }
-        key_columns = list(thresholds.keys())
-        max_variance = 0
-        max_variance_column = ""
-        # find the largest relative‐change driver
-        for col in key_columns:
-            var = row.get(f"{col} Variance", 0)
-            init = row.get(f"{col}_begin", 0)
-            if init and abs(var)/abs(init) > thresholds[col] and abs(var) > max_variance:
-                max_variance = abs(var)
-                max_variance_column = col
+        drivers = []
+        # 1) Gather percent and absolute changes for each metric
+        for m in METRICS:
+            b_col = f"{m}_begin"
+            f_col = f"{m}_final"
+            if b_col in row and f_col in row:
+                b = row[b_col]
+                f = row[f_col]
+                if pd.notna(b) and b != 0 and pd.notna(f):
+                    var = f - b
+                    pct = (var / abs(b)) * 100
+                    drivers.append({"metric": m, "var": var, "pct": pct})
 
-        # build the text
-        if max_variance_column:
-            var_val = row.get(f"{max_variance_column} Variance", 0)
+        if drivers:
+            # 2) Sort by absolute percent change, take top 3
+            top3 = sorted(drivers, key=lambda d: abs(d["pct"]), reverse=True)[:3]
 
-            # handle Revenue specially
-            if max_variance_column == "Net Total Revenue ($)":
-                # basic revenue change
-                revenue_text = f"Revenue {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}"
-                # now compute volume vs price
-                rev_b = row.get("Net Total Revenue ($)_begin", np.nan)
-                rev_f = row.get("Net Total Revenue ($)_final", np.nan)
-                vol_b = row.get("Net Res (MBOE)_begin", np.nan)
-                vol_f = row.get("Net Res (MBOE)_final", np.nan)
-                if pd.notna(rev_b) and pd.notna(rev_f) and vol_b and vol_f:
-                    price_b = rev_b/vol_b
-                    price_f = rev_f/vol_f
-                    vol_pct   = (vol_f - vol_b)/vol_b*100
-                    price_pct = (price_f - price_b)/price_b*100
-                    # pick the larger driver
-                    if abs(vol_pct) > abs(price_pct):
-                        driver_text = f"driven primarily by a {vol_pct:.1f}% change in net production volume"
-                        other_text  = f" vs. a {price_pct:.1f}% change in realized price"
-                    else:
-                        driver_text = f"driven primarily by a {price_pct:.1f}% change in realized price"
-                        other_text  = f" vs. a {vol_pct:.1f}% change in net production volume"
-                    reason.append(f"{revenue_text}, {driver_text}{other_text}.")
+            # 3) The #1 driver for your Key Metric / Variance Value
+            top1 = top3[0]
+            key_metric   = top1["metric"]
+            variance_val = top1["var"]
+
+            # 4) Build explanation phrases
+            parts = []
+            for d in top3:
+                m, v, p = d["metric"], d["var"], d["pct"]
+                sign = "increased" if v > 0 else "decreased"
+
+                if m == "Net Total Revenue ($)":
+                    parts.append(f"Revenue {sign} by ${abs(v):,.0f} ({p:.1f}%)")
+                elif "$" in m or m == npv_column:
+                    # expense, capex, NPV, etc.
+                    parts.append(f"{m} {sign} by ${abs(v):,.0f} ({p:.1f}%)")
+                elif "Oil" in m or "Gas" in m or "NGL" in m:
+                    parts.append(f"{m} {sign} by {abs(v):,.2f} ({p:.1f}%)")
+                elif "WI" in m:
+                    # working interest
+                    parts.append(f"{m} {sign} by {abs(p):.1f}%")
                 else:
-                    # fallback if we can’t compute
-                    reason.append(f"{revenue_text}, likely due to volume or price changes.")
-            
-            # all other metrics as before
-            elif max_variance_column == "Net Operating Expense ($)":
-                reason.append(f"Operating expense {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}, likely due to maintenance or inefficiencies.")
-            elif max_variance_column == "Inital Approx WI":
-                reason.append(f"Working interest changed by {abs(var_val):.2f}% , altering revenue share.")
-            elif max_variance_column == "Net Res Oil (Mbbl)":
-                reason.append(f"Oil reserves changed by {abs(var_val):,.2f} Mbbl, due to well revisions.")
-            elif max_variance_column == "Net Res Gas (MMcf)":
-                reason.append(f"Gas reserves changed by {abs(var_val):,.2f} MMcf, due to reservoir updates.")
-            elif max_variance_column == "Net Capex ($)":
-                reason.append(f"Capex {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}, reflecting project spend.")
-            elif max_variance_column == "Net Res NGL (Mbbl)":
-                reason.append(f"NGL reserves changed by {abs(var_val):,.2f} Mbbl.")
-            elif max_variance_column == npv_column:
-                reason.append(f"{npv_column} {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}, reflecting reserve or cost changes.")
-        
+                    # catch-all
+                    parts.append(f"{m} {sign} by {abs(v):,.2f} ({p:.1f}%)")
+
+            explanation = "; ".join(parts) + "."
+
+        else:
+            key_metric   = ""
+            variance_val = 0
+            explanation  = ""
+
         explanations.append({
-            "PROPNUM": row["PROPNUM"],
-            "LEASE_NAME": row["LEASE_NAME"],
-            "Key Metric": max_variance_column,
-            "Variance Value": var_val,
-            "Explanation": " ".join(reason)
+            "PROPNUM":        row["PROPNUM"],
+            "LEASE_NAME":     row["LEASE_NAME"],
+            "Key Metric":     key_metric,
+            "Variance Value": variance_val,
+            "Explanation":    explanation
         })
+
     return pd.DataFrame(explanations)
+
 
 
 def identify_negative_npv_wells(variance_df, npv_column):
