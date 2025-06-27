@@ -4,37 +4,32 @@ import numpy as np
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 import io
-import tempfile
 from datetime import datetime
-import base64
+import tempfile
+import os
 
-# ====== FONT SETUP FOR PDF ======
-HAS_GARAMOND = False
+st.set_page_config(layout="wide")
+
+# Font logic for plots
 try:
     from matplotlib import font_manager
-    available_fonts = set(f.name for f in font_manager.fontManager.ttflist)
-    HAS_GARAMOND = 'Garamond' in available_fonts
+    font_list = set(f.name for f in font_manager.fontManager.ttflist)
+    HAS_GARAMOND = 'Garamond' in font_list
 except Exception:
     HAS_GARAMOND = False
+DEFAULT_FONT = "Garamond" if HAS_GARAMOND else "Times New Roman"
 
-DEFAULT_FONT = "Garamond" if HAS_GARAMOND else "Times"
-
-# ====== PDF CLASS ======
+# PDF Class with Garamond/Times fallback
 class PDFWithPageNumbers(FPDF):
     def __init__(self):
         super().__init__()
-        try:
-            if HAS_GARAMOND:
-                self.add_font('Garamond', '', '', uni=True)
-        except Exception:
-            pass
-
     def footer(self):
         self.set_y(-15)
-        self.set_font(DEFAULT_FONT, "I", 8)
+        try:
+            self.set_font(DEFAULT_FONT, "I", 8)
+        except:
+            self.set_font("Times", "I", 8)
         self.cell(0, 10, f"Page {self.page_no()}", 0, 0, "C")
-
-# ====== FUNCTIONS ======
 
 def load_oneline(file):
     df = pd.read_excel(file, sheet_name="Oneline")
@@ -108,15 +103,10 @@ def calculate_nri_wi_ratio(begin_df, final_df):
         return df[[prop_col, lease_col, f"NRI/WI Ratio {suffix}"]].rename(
             columns={prop_col: "PROPNUM", lease_col: "LEASE_NAME"}
         )
-
     begin_ratios = compute_ratio(begin_df, 'Inital Approx WI_begin', 'Initial Approx NRI_begin', 'PROPNUM', 'LEASE_NAME', "Begin")
     final_ratios = compute_ratio(final_df, 'Inital Approx WI_final', 'Initial Approx NRI_final', 'PROPNUM', 'LEASE_NAME', "Final")
-
     merged = begin_ratios.merge(final_ratios, on=["PROPNUM", "LEASE_NAME"], how="outer")
-
-    def out_of_bounds(ratio):
-        return pd.notna(ratio) and (ratio < 0.70 or ratio > 0.85)
-
+    def out_of_bounds(ratio): return pd.notna(ratio) and (ratio < 0.70 or ratio > 0.85)
     merged["Outlier Source"] = merged.apply(lambda row: (
         "Both" if out_of_bounds(row.get("NRI/WI Ratio Begin", np.nan)) and out_of_bounds(row.get("NRI/WI Ratio Final", np.nan)) else
         "Begin" if out_of_bounds(row.get("NRI/WI Ratio Begin", np.nan)) else
@@ -125,31 +115,34 @@ def calculate_nri_wi_ratio(begin_df, final_df):
     ), axis=1)
     return merged[merged["Outlier Source"].notna()]
 
-# ===== BAR CHART, ORDERED POSITIVE TO NEGATIVE =====
+MAIN_METRICS = [
+    "Net Res Oil (Mbbl)",
+    "Net Res Gas (MMcf)",
+    "Net Res NGL (Mbbl)",
+    "Net Total Revenue ($)",
+    "Net Operating Expense ($)",
+    "Net Capex ($)",
+    "BFIT IRR (%)",
+    "BFIT Payout (years)",
+]
+
 def plot_top_contributors(variance_df, metric, top_n=10):
     col = f"{metric} Variance"
     if col not in variance_df.columns:
         return None
     plot_df = variance_df[["PROPNUM", "LEASE_NAME", col]].dropna()
     plot_df = plot_df[plot_df[col] != 0]
-    if plot_df.empty:
-        return None
+    if plot_df.empty: return None
     plot_df = plot_df.sort_values(by=col, ascending=False)
-    # Take top N positive, top N negative, then concat and flip so biggest positive is at the top
     top_pos = plot_df.head(top_n)
     top_neg = plot_df.tail(top_n)
-    combined = pd.concat([top_pos, top_neg])
-    combined = combined.sort_values(by=col, ascending=False).iloc[::-1]  # flip order for barh
-
+    combined = pd.concat([top_pos, top_neg]).sort_values(by=col, ascending=False)
     labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
     values = combined[col]
     fig, ax = plt.subplots(figsize=(8, max(6, 0.5*len(combined))))
-    if HAS_GARAMOND:
-        plt.rcParams['font.family'] = 'Garamond'
-    else:
-        plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.family'] = DEFAULT_FONT if HAS_GARAMOND else "serif"
     colors = ['#5CB85C' if v >= 0 else '#D9534F' for v in values]
-    ax.barh(labels, values, color=colors)
+    ax.barh(labels[::-1], values[::-1], color=colors[::-1])  # so largest positive is top
     ax.set_xlabel(f"Change in {metric}", fontname=DEFAULT_FONT)
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)", fontname=DEFAULT_FONT)
     ax.set_title(f"Top Contributors to {metric} Change", fontname=DEFAULT_FONT)
@@ -166,22 +159,8 @@ def add_chart_to_pdf(pdf, fig, title=""):
             pdf.cell(0, 12, title, ln=True, align='C')
             pdf.ln(4)
         pdf.image(tmpfile.name, x=15, w=180)
-    import os
     os.unlink(tmpfile.name)
 
-# ====== MAIN METRICS ======
-MAIN_METRICS = [
-    "Net Res Oil (Mbbl)",
-    "Net Res Gas (MMcf)",
-    "Net Res NGL (Mbbl)",
-    "Net Total Revenue ($)",
-    "Net Operating Expense ($)",
-    "Net Capex ($)",
-    "BFIT IRR (%)",
-    "BFIT Payout (years)",
-]
-
-# ====== GENERATE EXCEL ======
 def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_df, nri_df):
     excel_buffer = io.BytesIO()
     variance_columns = [
@@ -193,15 +172,12 @@ def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_d
     ]
     filtered_df = variance_df[["PROPNUM", "LEASE_NAME"] + variance_columns]
     filtered_df = filtered_df.sort_values(by=[f"{npv_column} Variance", "Reserve Category Final"], ascending=[False, True])
-
     begin_propnumbers = set(begin_df["PROPNUM"])
     final_propnumbers = set(final_df["PROPNUM"])
     added_wells = final_df[final_df["PROPNUM"].isin(final_propnumbers - begin_propnumbers)]
     removed_wells = begin_df[begin_df["PROPNUM"].isin(begin_propnumbers - final_propnumbers)]
-
     added_wells['NPV'] = added_wells.get(f"{npv_column}_final", np.nan)
     removed_wells['NPV'] = removed_wells.get(f"{npv_column}_begin", np.nan)
-
     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
         filtered_df.to_excel(writer, sheet_name="Variance Summary", index=False)
         filtered_wells_df[["PROPNUM", "LEASE_NAME"]].to_excel(writer, sheet_name="Wells with Negative or Zero NPV", index=False)
@@ -210,7 +186,6 @@ def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_d
         nri_df[["PROPNUM", "LEASE_NAME", "NRI/WI Ratio Begin", "NRI/WI Ratio Final", "Outlier Source"]].to_excel(
             writer, sheet_name="Lease NRI", index=False
         )
-        # Add top contributors for each metric, truncating name to 31 chars
         for metric in MAIN_METRICS + [npv_column]:
             col = f"{metric} Variance"
             if col in variance_df.columns:
@@ -227,13 +202,11 @@ def generate_excel(variance_df, npv_column, filtered_wells_df, begin_df, final_d
     excel_buffer.seek(0)
     return excel_buffer
 
-# ====== GENERATE PDF ======
 def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
     pdf_buffer = io.BytesIO()
     pdf = PDFWithPageNumbers()
     variance_df_backup = variance_df.copy()
     variance_df = variance_df.merge(explanation_df, on=["PROPNUM", "LEASE_NAME"], how="left")
-
     for col in ['SE_RSV_CAT_begin', 'SE_RSV_CAT_final']:
         try:
             if col in variance_df.columns and variance_df[col].isnull().all():
@@ -252,21 +225,16 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
                     variance_df[col] = 'Unknown'
         except Exception:
             variance_df[col] = 'Unknown'
-
     categories = pd.unique(
         pd.concat([variance_df['SE_RSV_CAT_begin'], variance_df['SE_RSV_CAT_final']])
     ).tolist()
     categories = [cat for cat in categories if pd.notna(cat)]
-    if not categories:
-        categories = ['Summary']
-
-    # Define column widths
+    if not categories: categories = ['Summary']
     prop_lease_width = 60
     cat_width = 22
     value_width = 26
     line_height = 5
     bottom_margin = 15
-
     def check_page_break(pdf, needed_height):
         if pdf.get_y() + needed_height > pdf.h - bottom_margin:
             pdf.add_page()
@@ -279,7 +247,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.set_font(DEFAULT_FONT, size=10)
-
     def check_outlier_page_break(pdf, needed_height):
         begin_width = 30
         final_width = 30
@@ -294,23 +261,17 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.set_font(DEFAULT_FONT, size=10)
-
-    # --- 1. Collect Plots ---
-    metric_figs = []  # [(metric, fig), ...]
+    metric_figs = []
     metric_order = [m for m in MAIN_METRICS if m != npv_column]
     npv_fig = plot_top_contributors(variance_df, npv_column)
     for metric in metric_order:
         fig = plot_top_contributors(variance_df, metric)
-        if fig:
-            metric_figs.append((metric, fig))
-
-    # --- 2. Write all summaries first ---
+        if fig: metric_figs.append((metric, fig))
     for category in categories:
         pdf.add_page()
         pdf.set_font(DEFAULT_FONT, style="B", size=14)
         pdf.cell(0, 10, f"Variance Summary for {category}", ln=True, align='C')
         pdf.ln(2)
-
         pdf.set_font(DEFAULT_FONT, size=11)
         category_df = variance_df[
             (variance_df["SE_RSV_CAT_begin"] == category) | (variance_df["SE_RSV_CAT_final"] == category)
@@ -323,8 +284,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
         for line in summary_lines:
             pdf.cell(0, 8, line, ln=True)
         pdf.ln(4)
-
-        # Header row for main table
         pdf.set_font(DEFAULT_FONT, style="B", size=11)
         pdf.cell(prop_lease_width, 8, "PROPNUM / LEASE_NAME")
         pdf.cell(cat_width, 8, "Begin Cat")
@@ -334,7 +293,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
         pdf.set_draw_color(200, 200, 200)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.set_font(DEFAULT_FONT, size=10)
-
         if not category_df.empty:
             major_changes = category_df[
                 category_df[f"{npv_column} Variance"].abs() > category_df[f"{npv_column} Variance"].abs().quantile(0.95)
@@ -343,7 +301,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
                 value = row["Variance Value"]
                 metric = row["Key Metric"]
                 explanation = row["Explanation"]
-                # Remove decimals for value changes
                 if "Revenue" in metric or "$" in metric or "Capex" in metric or metric == npv_column:
                     val_str = f"${value:,.0f}"
                 elif "Oil" in metric:
@@ -354,17 +311,13 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
                     val_str = f"{value:.2%}"
                 else:
                     val_str = f"{value:,.2f}"
-
                 well_id = str(row["PROPNUM"])
                 lease_name = str(row["LEASE_NAME"])
                 well_text = well_id + "\n" + lease_name
-
                 well_lines = len(pdf.multi_cell(prop_lease_width, line_height, well_text, border=0, align='L', split_only=True))
                 explanation_lines = len(pdf.multi_cell(0, line_height, explanation, border=0, split_only=True))
                 row_height = max(line_height * well_lines, line_height * explanation_lines)
-
                 check_page_break(pdf, row_height)
-
                 x = pdf.get_x()
                 y = pdf.get_y()
                 pdf.set_xy(x, y)
@@ -375,26 +328,18 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
                 pdf.cell(value_width, row_height, val_str, border=0)
                 pdf.set_xy(x + prop_lease_width + cat_width * 2 + value_width, y)
                 pdf.multi_cell(0, line_height, explanation, border=0)
-
                 pdf.set_draw_color(220, 220, 220)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(1)
-
-    # --- 3. Add NPV plot as second page ---
     if npv_fig:
         add_chart_to_pdf(pdf, npv_fig, title=f"Top Contributors to {npv_column} Change")
-
-    # --- 4. Add remaining metric plots in order ---
     for metric, fig in metric_figs:
         add_chart_to_pdf(pdf, fig, title=f"Top Contributors to {metric} Change")
-
-    # --- 5. Add the rest: transitions and NRI outlier pages for all categories ---
     for category in categories:
         pdf.add_page()
         pdf.set_font(DEFAULT_FONT, style="B", size=14)
         pdf.cell(0, 10, f"Transitions and Outliers for {category}", ln=True, align='C')
         pdf.ln(2)
-
         pdf.set_font(DEFAULT_FONT, size=12)
         pdf.cell(0, 10, "Wells that Changed Reserve Category:", ln=True)
         pdf.set_font(DEFAULT_FONT, size=10)
@@ -408,7 +353,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(220, 220, 220)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(1)
-
         nri_outliers_category = nri_df[nri_df["PROPNUM"].isin(category_df["PROPNUM"])]
         if not nri_outliers_category.empty:
             pdf.set_font(DEFAULT_FONT, style="B", size=12)
@@ -418,7 +362,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
             begin_width = 30
             final_width = 30
             outlier_width = 30
-
             pdf.cell(60, 8, "PROPNUM / LEASE_NAME")
             pdf.cell(begin_width, 8, "Begin Ratio")
             pdf.cell(final_width, 8, "Final Ratio")
@@ -426,7 +369,6 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
             pdf.set_draw_color(200, 200, 200)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.set_font(DEFAULT_FONT, size=10)
-
             for _, row in nri_outliers_category.iterrows():
                 begin_ratio = row.get("NRI/WI Ratio Begin", None)
                 final_ratio = row.get("NRI/WI Ratio Final", None)
@@ -436,9 +378,7 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
                 well_text = well_id + "\n" + lease_name
                 well_lines = len(pdf.multi_cell(60, line_height, well_text, border=0, align='L', split_only=True))
                 row_height = line_height * well_lines
-
                 check_outlier_page_break(pdf, row_height)
-
                 x = pdf.get_x()
                 y = pdf.get_y()
                 pdf.multi_cell(60, line_height, well_text, border=0, align='L')
@@ -449,12 +389,9 @@ def generate_pdf(variance_df, npv_column, explanation_df, nri_df):
                 pdf.ln(row_height)
                 pdf.set_draw_color(220, 220, 220)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-
     pdf.output(pdf_buffer)
     pdf_buffer.seek(0)
     return pdf_buffer
-
-# ====== STREAMLIT APP ======
 
 st.title("Variance Audit Tool")
 st.write("Upload BEGIN and FINAL Excel files. Choose NPV column and generate reports.")
@@ -462,36 +399,23 @@ st.write("Upload BEGIN and FINAL Excel files. Choose NPV column and generate rep
 begin_file = st.file_uploader("Upload BEGIN Excel file (.xlsx)", type=["xlsx"])
 final_file = st.file_uploader("Upload FINAL Excel file (.xlsx)", type=["xlsx"])
 
-npv_column = None
-excel_buffer = None
-pdf_buffer = None
-
 if begin_file and final_file:
     begin_df = load_oneline(begin_file)
     final_df = load_oneline(final_file)
-
-    # Find available NPV columns
     npv_candidates = [col for col in begin_df.columns if col.startswith("NPV at")]
-    selected_npv = st.selectbox("Select NPV column", npv_candidates)
-    npv_column = selected_npv
-
-    # Calculate everything only once for download buttons
+    npv_column = st.selectbox("Select NPV column", npv_candidates)
     @st.cache_data(show_spinner=False)
     def compute_reports(begin_df, final_df, npv_column):
         begin_df_s = suffix_columns(begin_df, "_begin")
         final_df_s = suffix_columns(final_df, "_final")
         begin_df_s.columns = begin_df_s.columns.str.strip()
         final_df_s.columns = final_df_s.columns.str.strip()
-
         variance_df = begin_df_s.merge(final_df_s, on=["PROPNUM", "LEASE_NAME"], how="outer")
-
-        # Fill missing category columns if needed
         for col in ['SE_RSV_CAT_begin', 'SE_RSV_CAT_final']:
             if col not in variance_df.columns:
                 variance_df[col] = 'Unknown'
         variance_df['Reserve Category Begin'] = variance_df['SE_RSV_CAT_begin']
         variance_df['Reserve Category Final'] = variance_df['SE_RSV_CAT_final']
-
         key_columns = [
             "Net Total Revenue ($)", "Net Operating Expense ($)", "Inital Approx WI", "Initial Approx NRI",
             "Net Res Oil (Mbbl)", "Net Res Gas (MMcf)", "Net Capex ($)", "Net Res NGL (Mbbl)", npv_column
@@ -501,11 +425,9 @@ if begin_file and final_file:
             col_final = f"{col}_final"
             if col_begin in variance_df.columns and col_final in variance_df.columns:
                 variance_df[f"{col} Variance"] = variance_df[col_final] - variance_df[col_begin]
-
         explanation_df = generate_explanations(variance_df, npv_column)
         negative_npv_wells = identify_negative_npv_wells(variance_df, npv_column)
         nri_df = calculate_nri_wi_ratio(begin_df_s, final_df_s)
-
         excel_buffer = generate_excel(
             variance_df, npv_column, negative_npv_wells, begin_df_s, final_df_s, nri_df
         )
@@ -513,20 +435,22 @@ if begin_file and final_file:
             variance_df, npv_column, explanation_df, nri_df
         )
         return excel_buffer, pdf_buffer
-
     if st.button("Generate and Download Reports"):
         excel_buffer, pdf_buffer = compute_reports(begin_df, final_df, npv_column)
-        st.download_button(
-            label="Download Excel Report",
-            data=excel_buffer,
-            file_name=f"variance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="excel_dl"
-        )
-        st.download_button(
-            label="Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"variance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            mime="application/pdf",
-            key="pdf_dl"
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                label="Download Excel Report",
+                data=excel_buffer,
+                file_name=f"variance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="excel_dl"
+            )
+        with col2:
+            st.download_button(
+                label="Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"variance_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                key="pdf_dl"
+            )
