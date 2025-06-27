@@ -148,22 +148,29 @@ def plot_top_contributors(variance_df, metric, top_n=10):
     if col not in variance_df.columns:
         return None
     plot_df = variance_df[["PROPNUM", "LEASE_NAME", col]].dropna()
-    plot_df = plot_df.sort_values(by=col, ascending=False)
     plot_df = plot_df[plot_df[col] != 0]
-    if plot_df.empty: return None
-    top_pos = plot_df.head(top_n)
-    top_neg = plot_df.tail(top_n).sort_values(by=col)
-    combined = pd.concat([top_neg, top_pos])
+
+    if plot_df.empty:
+        return None
+
+    # Get top N positive and negative, then concatenate and sort descending so positives on top
+    top_pos = plot_df.nlargest(top_n, col)
+    top_neg = plot_df.nsmallest(top_n, col)
+    combined = pd.concat([top_pos, top_neg])
+    combined = combined.sort_values(by=col, ascending=False)  # This ensures green (max pos) is at the top
+
     labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
     values = combined[col]
+
     fig, ax = plt.subplots(figsize=(8, max(6, 0.5*len(combined))))
-    colors = ['#D9534F' if v < 0 else '#5CB85C' for v in values]
-    bars = ax.barh(labels, values, color=colors)
+    colors = ['#5CB85C' if v >= 0 else '#D9534F' for v in values]  # green for positive, red for negative
+    ax.barh(labels, values, color=colors)
     ax.set_xlabel(f"Change in {metric}", fontname='Garamond' if HAS_GARAMOND else None)
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)", fontname='Garamond' if HAS_GARAMOND else None)
     ax.set_title(f"Top Contributors to {metric} Change", fontname='Garamond' if HAS_GARAMOND else None)
     plt.tight_layout()
     return fig
+
 
 def add_chart_to_pdf(pdf, fig, title=""):
     import tempfile
