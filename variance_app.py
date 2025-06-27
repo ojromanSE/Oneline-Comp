@@ -85,40 +85,69 @@ def generate_explanations(variance_df, npv_column):
         key_columns = list(thresholds.keys())
         max_variance = 0
         max_variance_column = ""
+        # find the largest relative‐change driver
         for col in key_columns:
-            if f"{col}_final" in row and f"{col}_begin" in row:
-                variance = row.get(f"{col} Variance", 0)
-                initial_value = row.get(f"{col}_begin", 0)
-                if initial_value != 0 and abs(variance) / abs(initial_value) > thresholds[col]:
-                    if abs(variance) > max_variance:
-                        max_variance = abs(variance)
-                        max_variance_column = col
+            var = row.get(f"{col} Variance", 0)
+            init = row.get(f"{col}_begin", 0)
+            if init and abs(var)/abs(init) > thresholds[col] and abs(var) > max_variance:
+                max_variance = abs(var)
+                max_variance_column = col
+
+        # build the text
         if max_variance_column:
-            variance = row.get(f"{max_variance_column} Variance", 0)
+            var_val = row.get(f"{max_variance_column} Variance", 0)
+
+            # handle Revenue specially
             if max_variance_column == "Net Total Revenue ($)":
-                reason.append(f"Revenue increased by ${abs(variance):,.0f}, likely due to an increase in production volume or commodity prices.")
+                # basic revenue change
+                revenue_text = f"Revenue {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}"
+                # now compute volume vs price
+                rev_b = row.get("Net Total Revenue ($)_begin", np.nan)
+                rev_f = row.get("Net Total Revenue ($)_final", np.nan)
+                vol_b = row.get("Net Res (MBOE)_begin", np.nan)
+                vol_f = row.get("Net Res (MBOE)_final", np.nan)
+                if pd.notna(rev_b) and pd.notna(rev_f) and vol_b and vol_f:
+                    price_b = rev_b/vol_b
+                    price_f = rev_f/vol_f
+                    vol_pct   = (vol_f - vol_b)/vol_b*100
+                    price_pct = (price_f - price_b)/price_b*100
+                    # pick the larger driver
+                    if abs(vol_pct) > abs(price_pct):
+                        driver_text = f"driven primarily by a {vol_pct:.1f}% change in net production volume"
+                        other_text  = f" vs. a {price_pct:.1f}% change in realized price"
+                    else:
+                        driver_text = f"driven primarily by a {price_pct:.1f}% change in realized price"
+                        other_text  = f" vs. a {vol_pct:.1f}% change in net production volume"
+                    reason.append(f"{revenue_text}, {driver_text}{other_text}.")
+                else:
+                    # fallback if we can’t compute
+                    reason.append(f"{revenue_text}, likely due to volume or price changes.")
+            
+            # all other metrics as before
             elif max_variance_column == "Net Operating Expense ($)":
-                reason.append(f"Operating expense increased by ${abs(variance):,.0f}, likely due to higher maintenance or operational inefficiencies.")
+                reason.append(f"Operating expense {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}, likely due to maintenance or inefficiencies.")
             elif max_variance_column == "Inital Approx WI":
-                reason.append(f"Working Interest (WI) changed by {abs(variance):,.2f}%, changing the share of revenue.")
+                reason.append(f"Working interest changed by {abs(var_val):.2f}% , altering revenue share.")
             elif max_variance_column == "Net Res Oil (Mbbl)":
-                reason.append(f"Oil reserves changed by {abs(variance):,.2f} Mbbl, possibly due to new well discoveries or reservoir revisions.")
+                reason.append(f"Oil reserves changed by {abs(var_val):,.2f} Mbbl, due to well revisions.")
             elif max_variance_column == "Net Res Gas (MMcf)":
-                reason.append(f"Gas reserves changed by {abs(variance):,.2f} MMcf, likely due to reservoir performance or revised estimates.")
+                reason.append(f"Gas reserves changed by {abs(var_val):,.2f} MMcf, due to reservoir updates.")
             elif max_variance_column == "Net Capex ($)":
-                reason.append(f"Capital expenditures changed by ${abs(variance):,.0f}, likely due to new projects or maintenance activities.")
+                reason.append(f"Capex {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}, reflecting project spend.")
             elif max_variance_column == "Net Res NGL (Mbbl)":
-                reason.append(f"NGL reserves changed by {abs(variance):,.2f} Mbbl, possibly due to better recovery or improved reservoir performance.")
+                reason.append(f"NGL reserves changed by {abs(var_val):,.2f} Mbbl.")
             elif max_variance_column == npv_column:
-                reason.append(f"{npv_column} changed by ${abs(variance):,.0f}, likely due to increased reserves or improved cost efficiency.")
+                reason.append(f"{npv_column} {'increased' if var_val>0 else 'decreased'} by ${abs(var_val):,.0f}, reflecting reserve or cost changes.")
+        
         explanations.append({
             "PROPNUM": row["PROPNUM"],
             "LEASE_NAME": row["LEASE_NAME"],
             "Key Metric": max_variance_column,
-            "Variance Value": row.get(f"{max_variance_column} Variance", 0),
-            "Explanation": f"{' '.join(reason)}"
+            "Variance Value": var_val,
+            "Explanation": " ".join(reason)
         })
     return pd.DataFrame(explanations)
+
 
 def identify_negative_npv_wells(variance_df, npv_column):
     return variance_df[(variance_df.get(f"{npv_column}_begin", 0) > 0) & (variance_df.get(f"{npv_column}_final", 0) <= 0)]
