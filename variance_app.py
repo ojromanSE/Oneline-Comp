@@ -66,58 +66,68 @@ def calculate_nri_wi_ratio(begin_df, final_df):
 
 # ==== EXPLANATIONS ====
 def generate_explanations(var_df, npv_col):
-    METRICS = MAIN_METRICS + [npv_col]
+    # Exclude BFIT IRR and BFIT Payout from consideration
+    base_metrics = [
+        "Net Res Oil (Mbbl)",
+        "Net Res Gas (MMcf)",
+        "Net Res NGL (Mbbl)",
+        "Net Total Revenue ($)",
+        "Net Operating Expense ($)",
+        "Net Capex ($)"
+    ]
+    METRICS = base_metrics + [npv_col]
+
     rows = []
     for _, r in var_df.iterrows():
         drivers = []
-        # 1) Collect Δ and % for every metric
+        # 1) Collect delta and pct for each metric
         for m in METRICS:
-            b, f = f"{m}_begin", f"{m}_final"
-            if b in r and f in r:
-                vb, vf = r[b], r[f]
+            b_col, f_col = f"{m}_begin", f"{m}_final"
+            if b_col in r and f_col in r:
+                vb, vf = r[b_col], r[f_col]
                 if pd.notna(vb) and vb != 0 and pd.notna(vf):
                     delta = vf - vb
                     pct   = delta / abs(vb) * 100
                     drivers.append((m, delta, pct))
 
+        # 2) If no valid drivers, blank out
         if not drivers:
-            # no change or missing → empty explanation
             rows.append({
-                "PROPNUM": r["PROPNUM"],
-                "LEASE_NAME": r["LEASE_NAME"],
-                "Key Metric": "",
+                "PROPNUM":        r["PROPNUM"],
+                "LEASE_NAME":     r["LEASE_NAME"],
+                "Key Metric":     "",
                 "Variance Value": 0,
-                "Explanation": ""
+                "Explanation":    ""
             })
             continue
 
-        # 2) pick top 3 by absolute % change
+        # 3) Pick top 3 by absolute % change
         top3 = sorted(drivers, key=lambda x: abs(x[2]), reverse=True)[:3]
-        # #1 for Key Metric / Variance Value
+        # Use #1 for the Key Metric column
         km, kv, _ = top3[0]
 
-        # 3) build the semicolon‐separated text, with no decimals anywhere
+        # 4) Build comma‐separated, no‐decimal explanation pieces
         parts = []
         for m, d, p in top3:
             sign = "increased" if d > 0 else "decreased"
-            # Monetary or NPV metrics get a leading $
+            # Money or NPV → leading $
             if m.endswith("$") or "NPV" in m:
                 parts.append(f"{m} {sign} by ${abs(d):,.0f} ({p:.0f}%)")
             else:
-                # units like Mbbl or MMcf are part of m already
                 parts.append(f"{m} {sign} by {abs(d):,.0f} ({p:.0f}%)")
 
         explanation = "; ".join(parts) + "."
 
         rows.append({
-            "PROPNUM": r["PROPNUM"],
-            "LEASE_NAME": r["LEASE_NAME"],
-            "Key Metric": km,
+            "PROPNUM":        r["PROPNUM"],
+            "LEASE_NAME":     r["LEASE_NAME"],
+            "Key Metric":     km,
             "Variance Value": kv,
-            "Explanation": explanation
+            "Explanation":    explanation
         })
 
     return pd.DataFrame(rows)
+
 
 
 # ==== PLOTTING ====
