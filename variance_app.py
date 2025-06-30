@@ -116,27 +116,38 @@ def generate_explanations(var_df, npv_col):
 
 # ==== PLOTTING ====
 def plot_top_contributors(var_df, metric, top_n=10):
+    import matplotlib.ticker as mtick
+
     col = f"{metric} Variance"
     if col not in var_df.columns:
         return None
-    df = var_df[["PROPNUM","LEASE_NAME",col]].dropna()
+
+    df = var_df[["PROPNUM", "LEASE_NAME", col]].dropna()
     df = df[df[col] != 0]
     pos = df[df[col] > 0].sort_values(col, ascending=False).head(top_n)
     neg = df[df[col] < 0].sort_values(col, ascending=True).head(top_n)
     combined = pd.concat([pos, neg])
     if combined.empty:
         return None
+
     labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
     values = combined[col]
     colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
-    fig, ax = plt.subplots(figsize=(8, max(4, 0.4*len(combined))))
+
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.4 * len(combined))))
     ax.barh(labels, values, color=colors)
+
+    # use plain decimal formatting with thousands commas, no decimals
+    ax.xaxis.set_major_formatter(mtick.StrMethodFormatter('{x:,.0f}'))
+    ax.ticklabel_format(axis='x', style='plain')  # disable scientific notation
+
     ax.set_xlabel(f"Change in {metric}")
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)")
     ax.set_title(f"Top Contributors to {metric} Change")
     ax.invert_yaxis()
     plt.tight_layout()
     return fig
+
 
 def add_chart_to_pdf(pdf, fig, title=""):
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
