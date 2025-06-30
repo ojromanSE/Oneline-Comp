@@ -319,9 +319,9 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
         
         # then only the PLOT_METRICS (no BFIT IRR, no BFIT Payout)
         for m in PLOT_METRICS:
-    fig = plot_top_contributors(df, m)
-    if fig:
-        add_chart_to_pdf(pdf, fig, f"Top Contributors to {m} Change")
+        fig = plot_top_contributors(df, m)
+        if fig:
+            add_chart_to_pdf(pdf, fig, f"Top Contributors to {m} Change")
 
     # 3) Transitions & Outliers
     for cat in cats:
