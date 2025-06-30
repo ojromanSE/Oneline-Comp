@@ -8,6 +8,8 @@ import os
 import tempfile
 from fpdf import FPDF
 import matplotlib.ticker as mtick
+from matplotlib.ticker import FuncFormatter
+
 
 # ==== CONFIGURATION ====
 MAIN_METRICS = [
