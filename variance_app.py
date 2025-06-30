@@ -310,15 +310,11 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
     # 2) Plots
     # inside generate_pdf, after the Variance summaries...
     # 2) Plots
-        # inside generate_pdf, replace your existing “Plots” section with:
-        
-        # first the NPV chart
-        npv_fig = plot_top_contributors(df, npv_col)
-        if npv_fig:
-            add_chart_to_pdf(pdf, npv_fig, f"Top Contributors to {npv_col} Change")
-        
-        # then only the PLOT_METRICS (no BFIT IRR, no BFIT Payout)
-        for m in PLOT_METRICS:
+    npv_fig = plot_top_contributors(df, npv_col)
+    if npv_fig:
+        add_chart_to_pdf(pdf, npv_fig, f"Top Contributors to {npv_col} Change")
+
+    for m in PLOT_METRICS:
         fig = plot_top_contributors(df, m)
         if fig:
             add_chart_to_pdf(pdf, fig, f"Top Contributors to {m} Change")
