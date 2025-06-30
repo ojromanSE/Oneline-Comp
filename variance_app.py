@@ -125,25 +125,40 @@ def generate_explanations(var_df, npv_col):
 # ==== PLOTTING ====
 
 def plot_top_contributors(var_df, metric, top_n=10):
-    # … your existing extraction + scaling logic …
+    col = f"{metric} Variance"
+    if col not in var_df.columns:
+        return None
 
-    # decide on label
-    if metric in ("Net Total Revenue ($)",
-                  "Net Operating Expense ($)",
-                  "Net Capex ($)"):
-        # remove the " ($)" suffix before appending " ($M)"
-        clean = metric.replace(" ($)", "")
-        xlabel = f"Change in {clean} ($M)"
-    elif "NPV" in metric:
-        xlabel = f"Change in {metric} ($M)"
+    # filter out zero or missing
+    df = var_df[["PROPNUM", "LEASE_NAME", col]].dropna()
+    df = df[df[col] != 0]
+
+    # pick top positives and negatives
+    pos = df[df[col] > 0].nlargest(top_n, col)
+    neg = df[df[col] < 0].nsmallest(top_n, col)
+    combined = pd.concat([pos, neg])
+    if combined.empty:
+        return None
+
+    # labels and raw values
+    labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
+    values = combined[col].copy()
+
+    # scale into millions for $-metrics
+    if metric in ("Net Total Revenue ($)", "Net Operating Expense ($)", "Net Capex ($)") or "NPV" in metric:
+        values = values / 1_000.0
+        xlabel = f"Change in {metric.replace(' ($)','')} ($M)"
     else:
         xlabel = f"Change in {metric}"
 
-    # plotting…
+    # colors
+    colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
+
+    # draw figure
     fig, ax = plt.subplots(figsize=(8, max(4, 0.4 * len(combined))))
     ax.barh(labels, values, color=colors)
 
-    # apply decimal formatter
+    # plain‐decimal formatting with commas, no decimals
     fmt = FuncFormatter(lambda x, _: f"{x:,.0f}")
     ax.xaxis.set_major_formatter(fmt)
 
