@@ -21,15 +21,10 @@ MAIN_METRICS = [
     "BFIT Payout (years)",
 ]
 
-PLOT_METRICS = [
-    "Net Res Oil (Mbbl)",
-    "Net Res Gas (MMcf)",
-    "Net Res NGL (Mbbl)",
-    "Net Total Revenue ($)",
-    "Net Operating Expense ($)",
-    "Net Capex ($)",
-    # NPV will be handled separately
-]
+# right below MAIN_METRICS
+PLOT_METRICS = [m for m in MAIN_METRICS 
+                if m not in ("BFIT IRR (%)","BFIT Payout (years)")]
+
 
 # Path to your logo file in the repo root:
 LOGO_PATH = "logo-schaperintl-1.png"
@@ -315,14 +310,19 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
     # 2) Plots
     # inside generate_pdf, after the Variance summaries...
     # 2) Plots
-    npv_fig = plot_top_contributors(df, npv_col)
-    if npv_fig:
-        add_chart_to_pdf(pdf, npv_fig, f"Top Contributors to {npv_col} Change")
-    
-    for m in PLOT_METRICS:
-        fig = plot_top_contributors(df, m)
-        if fig:
-            add_chart_to_pdf(pdf, fig, f"Top Contributors to {m} Change")
+        # inside generate_pdf, replace your existing “Plots” section with:
+        
+        # first the NPV chart
+        npv_fig = plot_top_contributors(df, npv_col)
+        if npv_fig:
+            add_chart_to_pdf(pdf, npv_fig, f"Top Contributors to {npv_col} Change")
+        
+        # then only the PLOT_METRICS (no BFIT IRR, no BFIT Payout)
+        for m in PLOT_METRICS:
+    fig = plot_top_contributors(df, m)
+    if fig:
+        add_chart_to_pdf(pdf, fig, f"Top Contributors to {m} Change")
+
     # 3) Transitions & Outliers
     for cat in cats:
         subgroup = df[(df["SE_RSV_CAT_begin"]==cat)|(df["SE_RSV_CAT_final"]==cat)]
