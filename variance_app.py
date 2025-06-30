@@ -7,6 +7,7 @@ import zipfile
 import os
 import tempfile
 from fpdf import FPDF
+import matplotlib.ticker as mtick
 
 # ==== CONFIGURATION ====
 MAIN_METRICS = [
@@ -116,16 +117,14 @@ def generate_explanations(var_df, npv_col):
 
 # ==== PLOTTING ====
 def plot_top_contributors(var_df, metric, top_n=10):
-    import matplotlib.ticker as mtick
-
     col = f"{metric} Variance"
     if col not in var_df.columns:
         return None
 
-    df = var_df[["PROPNUM", "LEASE_NAME", col]].dropna()
+    df = var_df[["PROPNUM","LEASE_NAME",col]].dropna()
     df = df[df[col] != 0]
-    pos = df[df[col] > 0].sort_values(col, ascending=False).head(top_n)
-    neg = df[df[col] < 0].sort_values(col, ascending=True).head(top_n)
+    pos = df[df[col] > 0].nlargest(top_n, col)
+    neg = df[df[col] < 0].nsmallest(top_n, col)
     combined = pd.concat([pos, neg])
     if combined.empty:
         return None
@@ -134,12 +133,14 @@ def plot_top_contributors(var_df, metric, top_n=10):
     values = combined[col]
     colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
 
-    fig, ax = plt.subplots(figsize=(8, max(4, 0.4 * len(combined))))
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.4*len(combined))))
     ax.barh(labels, values, color=colors)
 
-    # use plain decimal formatting with thousands commas, no decimals
-    ax.xaxis.set_major_formatter(mtick.StrMethodFormatter('{x:,.0f}'))
-    ax.ticklabel_format(axis='x', style='plain')  # disable scientific notation
+    # plain decimal formatting with thousands commas, no decimals
+    fmt = mtick.StrMethodFormatter('{x:,.0f}')
+    ax.xaxis.set_major_formatter(fmt)
+    # ensure no offset or scientific
+    ax.xaxis.get_major_formatter().set_useOffset(False)
 
     ax.set_xlabel(f"Change in {metric}")
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)")
