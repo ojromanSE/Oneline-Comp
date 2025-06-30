@@ -121,11 +121,6 @@ def generate_explanations(var_df, npv_col):
     return pd.DataFrame(rows)
 
 # ==== PLOTTING ====
-from matplotlib.ticker import FuncFormatter
-
-from matplotlib.ticker import FuncFormatter
-
-from matplotlib.ticker import FuncFormatter
 
 def plot_top_contributors(var_df, metric, top_n=10):
     col = f"{metric} Variance"
@@ -148,7 +143,7 @@ def plot_top_contributors(var_df, metric, top_n=10):
         values = values / 1_000.0
         xlabel = f"Change in {metric} ($M)"
     else:
-        xlabel = f"Change in {metric}"
+        xlabel = f"Change in {metric} ($M)"
 
     colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
 
