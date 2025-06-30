@@ -9,7 +9,12 @@ import tempfile
 from fpdf import FPDF
 import matplotlib.ticker as mtick
 from matplotlib.ticker import FuncFormatter
+import matplotlib as mpl
 
+mpl.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Times New Roman"],
+})
 
 # ==== CONFIGURATION ====
 MAIN_METRICS = [
