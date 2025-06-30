@@ -21,6 +21,16 @@ MAIN_METRICS = [
     "BFIT Payout (years)",
 ]
 
+PLOT_METRICS = [
+    "Net Res Oil (Mbbl)",
+    "Net Res Gas (MMcf)",
+    "Net Res NGL (Mbbl)",
+    "Net Total Revenue ($)",
+    "Net Operating Expense ($)",
+    "Net Capex ($)",
+    # NPV will be handled separately
+]
+
 # Path to your logo file in the repo root:
 LOGO_PATH = "logo-schaperintl-1.png"
 
@@ -120,12 +130,13 @@ from matplotlib.ticker import FuncFormatter
 
 from matplotlib.ticker import FuncFormatter
 
+from matplotlib.ticker import FuncFormatter
+
 def plot_top_contributors(var_df, metric, top_n=10):
     col = f"{metric} Variance"
     if col not in var_df.columns:
         return None
 
-    # pull out non-zero variances
     df = var_df[["PROPNUM","LEASE_NAME",col]].dropna()
     df = df[df[col] != 0]
     pos = df[df[col] > 0].nlargest(top_n, col)
@@ -134,41 +145,32 @@ def plot_top_contributors(var_df, metric, top_n=10):
     if combined.empty:
         return None
 
-    # build labels
     labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
     values = combined[col].copy()
 
-    # metrics to scale into millions
-    to_millions = {
-        "NPV": True,
-        "Net Total Revenue ($)": True,
-        "Net Operating Expense ($)": True,
-        "Net Capex ($)": True
-    }
-    # detect scaling
-    if any(key in metric for key in to_millions if to_millions[key]):
-        values = values / 1000.0
+    # scale into millions for selected metrics
+    if metric in ("Net Total Revenue ($)", "Net Operating Expense ($)", "Net Capex ($)") or "NPV" in metric:
+        values = values / 1_000.0
         xlabel = f"Change in {metric} ($M)"
     else:
         xlabel = f"Change in {metric}"
 
-    # bar colors
-    colors = ['#5CB85C' if v>0 else '#D9534F' for v in values]
+    colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
 
-    # plot
     fig, ax = plt.subplots(figsize=(8, max(4, 0.4*len(combined))))
     ax.barh(labels, values, color=colors)
 
-    # format x-axis as plain decimals with commas, no decimals
+    # plain decimals with thousands separators
     fmt = FuncFormatter(lambda x, _: f"{x:,.0f}")
     ax.xaxis.set_major_formatter(fmt)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)")
     ax.set_title(f"Top Contributors to {metric} Change")
-    ax.invert_yaxis()   # largest positives at top
+    ax.invert_yaxis()
     plt.tight_layout()
     return fig
+
 
 
 
@@ -311,12 +313,16 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
                 pdf.ln(1)
 
     # 2) Plots
+    # inside generate_pdf, after the Variance summaries...
+    # 2) Plots
     npv_fig = plot_top_contributors(df, npv_col)
-    other_figs = [(m, plot_top_contributors(df,m)) for m in MAIN_METRICS if m!=npv_col]
-    if npv_fig: add_chart_to_pdf(pdf, npv_fig, f"Top Contributors to {npv_col} Change")
-    for m, fg in other_figs:
-        if fg: add_chart_to_pdf(pdf, fg, f"Top Contributors to {m} Change")
-
+    if npv_fig:
+        add_chart_to_pdf(pdf, npv_fig, f"Top Contributors to {npv_col} Change")
+    
+    for m in PLOT_METRICS:
+        fig = plot_top_contributors(df, m)
+        if fig:
+            add_chart_to_pdf(pdf, fig, f"Top Contributors to {m} Change")
     # 3) Transitions & Outliers
     for cat in cats:
         subgroup = df[(df["SE_RSV_CAT_begin"]==cat)|(df["SE_RSV_CAT_final"]==cat)]
