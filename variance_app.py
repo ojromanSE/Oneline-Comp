@@ -118,11 +118,14 @@ def generate_explanations(var_df, npv_col):
 # ==== PLOTTING ====
 from matplotlib.ticker import FuncFormatter
 
+from matplotlib.ticker import FuncFormatter
+
 def plot_top_contributors(var_df, metric, top_n=10):
     col = f"{metric} Variance"
     if col not in var_df.columns:
         return None
 
+    # pull out non-zero variances
     df = var_df[["PROPNUM","LEASE_NAME",col]].dropna()
     df = df[df[col] != 0]
     pos = df[df[col] > 0].nlargest(top_n, col)
@@ -131,24 +134,42 @@ def plot_top_contributors(var_df, metric, top_n=10):
     if combined.empty:
         return None
 
+    # build labels
     labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
-    values = combined[col]
-    colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
+    values = combined[col].copy()
 
+    # metrics to scale into millions
+    to_millions = {
+        "NPV": True,
+        "Net Total Revenue ($)": True,
+        "Net Operating Expense ($)": True,
+        "Net Capex ($)": True
+    }
+    # detect scaling
+    if any(key in metric for key in to_millions if to_millions[key]):
+        values = values / 1000.0
+        xlabel = f"Change in {metric} ($M)"
+    else:
+        xlabel = f"Change in {metric}"
+
+    # bar colors
+    colors = ['#5CB85C' if v>0 else '#D9534F' for v in values]
+
+    # plot
     fig, ax = plt.subplots(figsize=(8, max(4, 0.4*len(combined))))
     ax.barh(labels, values, color=colors)
 
-    # plain decimal formatting w/ commas, no sci or offset
+    # format x-axis as plain decimals with commas, no decimals
     fmt = FuncFormatter(lambda x, _: f"{x:,.0f}")
     ax.xaxis.set_major_formatter(fmt)
 
-    ax.set_xlabel(f"Change in {metric}")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)")
     ax.set_title(f"Top Contributors to {metric} Change")
-    ax.invert_yaxis()  # largest positive at top
+    ax.invert_yaxis()   # largest positives at top
     plt.tight_layout()
-
     return fig
+
 
 
 
