@@ -116,6 +116,8 @@ def generate_explanations(var_df, npv_col):
     return pd.DataFrame(rows)
 
 # ==== PLOTTING ====
+from matplotlib.ticker import FuncFormatter
+
 def plot_top_contributors(var_df, metric, top_n=10):
     col = f"{metric} Variance"
     if col not in var_df.columns:
@@ -136,18 +138,18 @@ def plot_top_contributors(var_df, metric, top_n=10):
     fig, ax = plt.subplots(figsize=(8, max(4, 0.4*len(combined))))
     ax.barh(labels, values, color=colors)
 
-    # plain decimal formatting with thousands commas, no decimals
-    fmt = mtick.StrMethodFormatter('{x:,.0f}')
+    # plain decimal formatting w/ commas, no sci or offset
+    fmt = FuncFormatter(lambda x, _: f"{x:,.0f}")
     ax.xaxis.set_major_formatter(fmt)
-    # ensure no offset or scientific
-    ax.xaxis.get_major_formatter().set_useOffset(False)
 
     ax.set_xlabel(f"Change in {metric}")
     ax.set_ylabel("Well (PROPNUM / LEASE_NAME)")
     ax.set_title(f"Top Contributors to {metric} Change")
-    ax.invert_yaxis()
+    ax.invert_yaxis()  # largest positive at top
     plt.tight_layout()
+
     return fig
+
 
 
 def add_chart_to_pdf(pdf, fig, title=""):
