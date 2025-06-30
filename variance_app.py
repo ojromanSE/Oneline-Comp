@@ -140,7 +140,7 @@ def plot_top_contributors(var_df, metric, top_n=10):
         xlabel = f"Change in {metric}"
 
     # plotting…
-    fig, ax = plt.subplots(...)
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.4 * len(combined))))
     ax.barh(labels, values, color=colors)
 
     # apply decimal formatter
