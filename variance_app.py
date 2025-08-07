@@ -28,13 +28,13 @@ MAIN_METRICS = [
     "BFIT Payout (years)",
 ]
 
-# right below MAIN_METRICS
-PLOT_METRICS = [m for m in MAIN_METRICS 
-                if m not in ("BFIT IRR (%)","BFIT Payout (years)")]
+PLOT_METRICS = [
+    m for m in MAIN_METRICS
+    if m not in ("BFIT IRR (%)", "BFIT Payout (years)")
+]
 
-
-# Path to your logo file in the repo root:
 LOGO_PATH = "logo-schaperintl-1.png"
+
 
 # ==== UTILS ====
 def load_oneline(file):
@@ -50,24 +50,39 @@ def load_oneline(file):
         df["SE_RSV_CAT"] = "Unknown"
     return df
 
-def suffix_columns(df, suffix, ignore=["PROPNUM","LEASE_NAME"]):
-    return df.rename(columns={c: f"{c}{suffix}" for c in df.columns if c not in ignore})
+
+def suffix_columns(df, suffix, ignore=["PROPNUM", "LEASE_NAME"]):
+    return df.rename(columns={
+        c: f"{c}{suffix}"
+        for c in df.columns
+        if c not in ignore
+    })
+
 
 def identify_negative_npv_wells(var_df, npv_col):
-    return var_df[
-        (var_df.get(f"{npv_col}_begin", 0) > 0) &
-        (var_df.get(f"{npv_col}_final", 0) <= 0)
-    ]
+    b_col = f"{npv_col}_begin"
+    f_col = f"{npv_col}_final"
+    # If either column is missing, return empty DataFrame
+    if b_col not in var_df.columns or f_col not in var_df.columns:
+        return var_df.iloc[0:0]
+    # Treat NaNs as zero and build boolean mask
+    mask = (var_df[b_col].fillna(0) > 0) & (var_df[f_col].fillna(0) <= 0)
+    return var_df.loc[mask]
+
 
 def calculate_nri_wi_ratio(begin_df, final_df):
     def _ratio(df, wi, nri, tag):
-        df = df[df[wi] != 0]
+        df = df[df[wi] != 0].copy()
         df[f"NRI/WI Ratio {tag}"] = df[nri] / df[wi]
         return df[["PROPNUM", "LEASE_NAME", f"NRI/WI Ratio {tag}"]]
+
     b = _ratio(begin_df, "Inital Approx WI_begin", "Initial Approx NRI_begin", "Begin")
     f = _ratio(final_df, "Inital Approx WI_final", "Initial Approx NRI_final", "Final")
     merged = b.merge(f, on=["PROPNUM", "LEASE_NAME"], how="outer")
-    def oob(x): return pd.notna(x) and (x < 0.7 or x > 0.85)
+
+    def oob(x):
+        return pd.notna(x) and (x < 0.7 or x > 0.85)
+
     merged["Outlier Source"] = merged.apply(
         lambda r: "Both" if oob(r["NRI/WI Ratio Begin"]) and oob(r["NRI/WI Ratio Final"])
         else "Begin" if oob(r["NRI/WI Ratio Begin"])
@@ -76,6 +91,7 @@ def calculate_nri_wi_ratio(begin_df, final_df):
         axis=1
     )
     return merged[merged["Outlier Source"].notna()]
+
 
 # ==== EXPLANATIONS ====
 def generate_explanations(var_df, npv_col):
@@ -89,6 +105,7 @@ def generate_explanations(var_df, npv_col):
     ]
     METRICS = base_metrics + [npv_col]
     rows = []
+
     for _, r in var_df.iterrows():
         drivers = []
         for m in METRICS:
@@ -97,8 +114,9 @@ def generate_explanations(var_df, npv_col):
                 vb, vf = r[b_col], r[f_col]
                 if pd.notna(vb) and vb != 0 and pd.notna(vf):
                     delta = vf - vb
-                    pct   = delta / abs(vb) * 100
+                    pct = delta / abs(vb) * 100
                     drivers.append((m, delta, pct))
+
         if not drivers:
             rows.append({
                 "PROPNUM": r["PROPNUM"],
@@ -108,6 +126,7 @@ def generate_explanations(var_df, npv_col):
                 "Explanation": ""
             })
             continue
+
         top3 = sorted(drivers, key=lambda x: abs(x[2]), reverse=True)[:3]
         km, kv, _ = top3[0]
         parts = []
@@ -117,6 +136,7 @@ def generate_explanations(var_df, npv_col):
                 parts.append(f"{m} {sign} by ${abs(d):,.0f} ({p:.0f}%)")
             else:
                 parts.append(f"{m} {sign} by {abs(d):,.0f} ({p:.0f}%)")
+
         explanation = "; ".join(parts) + "."
         rows.append({
             "PROPNUM": r["PROPNUM"],
@@ -125,45 +145,43 @@ def generate_explanations(var_df, npv_col):
             "Variance Value": kv,
             "Explanation": explanation
         })
+
     return pd.DataFrame(rows)
 
-# ==== PLOTTING ====
 
+# ==== PLOTTING ====
 def plot_top_contributors(var_df, metric, top_n=10):
     col = f"{metric} Variance"
     if col not in var_df.columns:
         return None
 
-    # filter out zero or missing
     df = var_df[["PROPNUM", "LEASE_NAME", col]].dropna()
     df = df[df[col] != 0]
 
-    # pick top positives and negatives
     pos = df[df[col] > 0].nlargest(top_n, col)
     neg = df[df[col] < 0].nsmallest(top_n, col)
     combined = pd.concat([pos, neg])
     if combined.empty:
         return None
 
-    # labels and raw values
-    labels = combined["PROPNUM"].astype(str) + "\n" + combined["LEASE_NAME"].astype(str)
+    labels = (
+        combined["PROPNUM"].astype(str)
+        + "\n"
+        + combined["LEASE_NAME"].astype(str)
+    )
     values = combined[col].copy()
 
-    # scale into millions for $-metrics
     if metric in ("Net Total Revenue ($)", "Net Operating Expense ($)", "Net Capex ($)") or "NPV" in metric:
         values = values / 1_000.0
-        xlabel = f"Change in {metric.replace(' ($)','')} ($M)"
+        xlabel = f"Change in {metric.replace(' ($)', '')} ($M)"
     else:
         xlabel = f"Change in {metric}"
 
-    # colors
     colors = ['#5CB85C' if v > 0 else '#D9534F' for v in values]
 
-    # draw figure
     fig, ax = plt.subplots(figsize=(8, max(4, 0.4 * len(combined))))
     ax.barh(labels, values, color=colors)
 
-    # plain‐decimal formatting with commas, no decimals
     fmt = FuncFormatter(lambda x, _: f"{x:,.0f}")
     ax.xaxis.set_major_formatter(fmt)
 
@@ -173,9 +191,6 @@ def plot_top_contributors(var_df, metric, top_n=10):
     ax.invert_yaxis()
     plt.tight_layout()
     return fig
-
-
-
 
 
 def add_chart_to_pdf(pdf, fig, title=""):
@@ -190,6 +205,7 @@ def add_chart_to_pdf(pdf, fig, title=""):
         pdf.image(tmp.name, x=15, w=180)
         os.unlink(tmp.name)
 
+
 # ==== EXCEL EXPORT ====
 def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
     cols = [
@@ -200,34 +216,57 @@ def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
         "Net Res Gas (MMcf) Variance",
         "Net Res NGL (Mbbl) Variance",
         f"{npv_col} Variance",
-        "Reserve Category Begin","Reserve Category Final"
+        "Reserve Category Begin", "Reserve Category Final"
     ]
-    summary = var_df[["PROPNUM","LEASE_NAME"] + cols]\
-              .sort_values(f"{npv_col} Variance", ascending=False)
+    summary = (
+        var_df[["PROPNUM", "LEASE_NAME"] + cols]
+        .sort_values(f"{npv_col} Variance", ascending=False)
+    )
     bset, fset = set(b_df["PROPNUM"]), set(f_df["PROPNUM"])
-    added   = f_df[f_df["PROPNUM"].isin(fset - bset)].copy()
+    added = f_df[f_df["PROPNUM"].isin(fset - bset)].copy()
     removed = b_df[b_df["PROPNUM"].isin(bset - fset)].copy()
-    added["NPV"]   = added.get(f"{npv_col}_final", np.nan)
-    removed["NPV"] = removed.get(f"{npv_col}_begin",  np.nan)
+    added["NPV"] = added.get(f"{npv_col}_final", np.nan)
+    removed["NPV"] = removed.get(f"{npv_col}_begin", np.nan)
+
     with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
         summary.to_excel(w, sheet_name="VarianceSummary", index=False)
-        neg_df[["PROPNUM","LEASE_NAME"]].to_excel(w, sheet_name="Neg_or_Zero_NPV", index=False)
-        added[["PROPNUM","LEASE_NAME","NPV"]].to_excel(w, sheet_name="Added_Wells", index=False)
-        removed[["PROPNUM","LEASE_NAME","NPV"]].to_excel(w, sheet_name="Removed_Wells", index=False)
-        nri_df[["PROPNUM","LEASE_NAME","NRI/WI Ratio Begin","NRI/WI Ratio Final","Outlier Source"]]\
-              .to_excel(w, sheet_name="Lease_NRI", index=False)
+        neg_df[["PROPNUM", "LEASE_NAME"]].to_excel(
+            w, sheet_name="Neg_or_Zero_NPV", index=False
+        )
+        added[["PROPNUM", "LEASE_NAME", "NPV"]].to_excel(
+            w, sheet_name="Added_Wells", index=False
+        )
+        removed[["PROPNUM", "LEASE_NAME", "NPV"]].to_excel(
+            w, sheet_name="Removed_Wells", index=False
+        )
+        nri_df[
+            [
+                "PROPNUM",
+                "LEASE_NAME",
+                "NRI/WI Ratio Begin",
+                "NRI/WI Ratio Final",
+                "Outlier Source",
+            ]
+        ].to_excel(w, sheet_name="Lease_NRI", index=False)
+
         for m in MAIN_METRICS + [npv_col]:
             col = f"{m} Variance"
             if col in var_df:
-                tmp = var_df[["PROPNUM","LEASE_NAME",col]].dropna()\
-                         .query(f"`{col}`!=0")\
-                         .sort_values(col, ascending=False)
+                tmp = (
+                    var_df[["PROPNUM", "LEASE_NAME", col]]
+                    .dropna()
+                    .query(f"`{col}` != 0")
+                    .sort_values(col, ascending=False)
+                )
                 if not tmp.empty:
-                    pos = tmp.head(10); neg = tmp.tail(10)
+                    pos = tmp.head(10)
+                    neg = tmp.tail(10)
                     combo = pd.concat([pos, neg])
                     name = f"Top_{m}_Ctrb"[:31]
                     combo.to_excel(w, sheet_name=name, index=False)
+
     buf.seek(0)
+
 
 # ==== PDF EXPORT ====
 class PDF(FPDF):
@@ -245,16 +284,24 @@ class PDF(FPDF):
             y = self.h - logo_w - 5
             self.image(self.logo_path, x=x, y=y, w=logo_w)
 
+
 def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
     pdf = PDF(logo_path=LOGO_PATH)
-    df = var_df.merge(expl_df, on=["PROPNUM","LEASE_NAME"], how="left")
-    for col in ["SE_RSV_CAT_begin","SE_RSV_CAT_final"]:
-        if col not in df: df[col] = "Unknown"
-    cats = pd.unique(pd.concat([df["SE_RSV_CAT_begin"], df["SE_RSV_CAT_final"]]))
+    df = var_df.merge(expl_df, on=["PROPNUM", "LEASE_NAME"], how="left")
+
+    for col in ["SE_RSV_CAT_begin", "SE_RSV_CAT_final"]:
+        if col not in df:
+            df[col] = "Unknown"
+
+    cats = pd.unique(
+        pd.concat([df["SE_RSV_CAT_begin"], df["SE_RSV_CAT_final"]])
+    )
     cats = [c for c in cats if pd.notna(c)]
-    if not cats: cats = ["Summary"]
+    if not cats:
+        cats = ["Summary"]
 
     pw, cw, vw, lh, bm = 60, 22, 26, 5, 15
+
     def page_break(h):
         if pdf.get_y() + h > pdf.h - bm:
             pdf.add_page()
@@ -270,53 +317,61 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
 
     # 1) Variance Summaries
     for cat in cats:
-        subgroup = df[(df["SE_RSV_CAT_begin"]==cat)|(df["SE_RSV_CAT_final"]==cat)]
+        subgroup = df[
+            (df["SE_RSV_CAT_begin"] == cat)
+            | (df["SE_RSV_CAT_final"] == cat)
+        ]
         pdf.add_page()
         pdf.set_font("Times", "B", 14)
-        pdf.cell(0,10,f"Variance Summary for {cat}", ln=True, align="C")
+        pdf.cell(0, 10, f"Variance Summary for {cat}", ln=True, align="C")
         pdf.ln(2)
-        pdf.set_font("Times","",11)
+        pdf.set_font("Times", "", 11)
         lines = [
             f"Net Oil Change: {subgroup['Net Res Oil (Mbbl) Variance'].sum():,.2f} Mbbl",
             f"Net Gas Change: {subgroup['Net Res Gas (MMcf) Variance'].sum():,.2f} MMcf",
             f"{npv_col} Change: ${subgroup[f'{npv_col} Variance'].sum():,.0f}"
         ]
-        for L in lines: pdf.cell(0,8,L,ln=True)
+        for L in lines:
+            pdf.cell(0, 8, L, ln=True)
         pdf.ln(4)
-        pdf.set_font("Times","B",11)
-        pdf.cell(pw,8,"PROPNUM / LEASE_NAME")
-        pdf.cell(cw,8,"Begin Cat")
-        pdf.cell(cw,8,"Final Cat")
-        pdf.cell(vw,8,"Value Change")
-        pdf.cell(0,8,"Explanation",ln=True)
-        pdf.set_draw_color(200,200,200)
-        pdf.line(10,pdf.get_y(),200,pdf.get_y())
-        pdf.set_font("Times","",10)
+        pdf.set_font("Times", "B", 11)
+        pdf.cell(pw, 8, "PROPNUM / LEASE_NAME")
+        pdf.cell(cw, 8, "Begin Cat")
+        pdf.cell(cw, 8, "Final Cat")
+        pdf.cell(vw, 8, "Value Change")
+        pdf.cell(0, 8, "Explanation", ln=True)
+        pdf.set_draw_color(200, 200, 200)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.set_font("Times", "", 10)
         if not subgroup.empty:
-            top5 = subgroup.loc[subgroup[f"{npv_col} Variance"].abs().nlargest(5).index]
+            top5 = subgroup.loc[
+                subgroup[f"{npv_col} Variance"].abs().nlargest(5).index
+            ]
             for _, r in top5.iterrows():
                 npv_var = r[f"{npv_col} Variance"]
                 val_str = f"${int(round(npv_var)):,.0f}"
                 well_text = f"{r['PROPNUM']}\n{r['LEASE_NAME']}"
                 expl = r["Explanation"]
-                hl = len(pdf.multi_cell(pw,lh,well_text,split_only=True))
-                el = len(pdf.multi_cell(0,lh,expl,split_only=True))
-                rh = max(hl*lh, el*lh)
+
+                hl = len(pdf.multi_cell(pw, lh, well_text, split_only=True))
+                el = len(pdf.multi_cell(0, lh, expl, split_only=True))
+                rh = max(hl * lh, el * lh)
+
                 page_break(rh)
                 x0, y0 = pdf.get_x(), pdf.get_y()
-                pdf.set_xy(x0,y0); pdf.multi_cell(pw,lh,well_text)
-                pdf.set_xy(x0+pw,y0)
-                pdf.cell(cw,rh,str(r["SE_RSV_CAT_begin"]))
-                pdf.cell(cw,rh,str(r["SE_RSV_CAT_final"]))
-                pdf.cell(vw,rh,val_str)
-                pdf.set_xy(x0+pw+2*cw+vw,y0)
-                pdf.multi_cell(0,lh,expl)
-                pdf.set_draw_color(220,220,220)
-                pdf.line(10,pdf.get_y(),200,pdf.get_y())
+
+                pdf.set_xy(x0, y0)
+                pdf.multi_cell(pw, lh, well_text)
+                pdf.set_xy(x0 + pw, y0)
+                pdf.cell(cw, rh, str(r["SE_RSV_CAT_begin"]))
+                pdf.cell(cw, rh, str(r["SE_RSV_CAT_final"]))
+                pdf.cell(vw, rh, val_str)
+                pdf.set_xy(x0 + pw + 2*cw + vw, y0)
+                pdf.multi_cell(0, lh, expl)
+                pdf.set_draw_color(220, 220, 220)
+                pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(1)
 
-    # 2) Plots
-    # inside generate_pdf, after the Variance summaries...
     # 2) Plots
     npv_fig = plot_top_contributors(df, npv_col)
     if npv_fig:
@@ -329,49 +384,56 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
 
     # 3) Transitions & Outliers
     for cat in cats:
-        subgroup = df[(df["SE_RSV_CAT_begin"]==cat)|(df["SE_RSV_CAT_final"]==cat)]
+        subgroup = df[
+            (df["SE_RSV_CAT_begin"] == cat)
+            | (df["SE_RSV_CAT_final"] == cat)
+        ]
         pdf.add_page()
-        pdf.set_font("Times","B",14)
-        pdf.cell(0,10,f"Transitions & Outliers for {cat}",ln=True,align="C")
+        pdf.set_font("Times", "B", 14)
+        pdf.cell(0, 10, f"Transitions & Outliers for {cat}", ln=True, align="C")
         pdf.ln(2)
-        pdf.set_font("Times","",12)
-        pdf.cell(0,10,"Wells that Changed Reserve Category:",ln=True)
-        pdf.set_font("Times","",10)
-        for _, r in subgroup[subgroup["SE_RSV_CAT_begin"]!=subgroup["SE_RSV_CAT_final"]].iterrows():
-            pdf.cell(0,6,f"{r['PROPNUM']} ({r['LEASE_NAME']})",ln=True)
-            pdf.cell(0,6,f"  From {r['SE_RSV_CAT_begin']} to {r['SE_RSV_CAT_final']}",ln=True)
-            pdf.set_draw_color(220,220,220)
-            pdf.line(10,pdf.get_y(),200,pdf.get_y())
+
+        pdf.set_font("Times", "", 12)
+        pdf.cell(0, 10, "Wells that Changed Reserve Category:", ln=True)
+        pdf.set_font("Times", "", 10)
+        for _, r in subgroup[subgroup["SE_RSV_CAT_begin"] != subgroup["SE_RSV_CAT_final"]].iterrows():
+            pdf.cell(0, 6, f"{r['PROPNUM']} ({r['LEASE_NAME']})", ln=True)
+            pdf.cell(0, 6, f"  From {r['SE_RSV_CAT_begin']} to {r['SE_RSV_CAT_final']}", ln=True)
+            pdf.set_draw_color(220, 220, 220)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(1)
+
         out = nri_df[nri_df["PROPNUM"].isin(subgroup["PROPNUM"])]
         if not out.empty:
-            pdf.set_font("Times","B",12)
-            pdf.cell(0,10,f"NRI/WI Ratio Outliers for {cat}",ln=True,align="C")
+            pdf.set_font("Times", "B", 12)
+            pdf.cell(0, 10, f"NRI/WI Ratio Outliers for {cat}", ln=True, align="C")
             pdf.ln(2)
-            pdf.set_font("Times","B",11)
-            pdf.cell(60,8,"PROPNUM / LEASE_NAME")
-            pdf.cell(30,8,"Begin Ratio")
-            pdf.cell(30,8,"Final Ratio")
-            pdf.cell(30,8,"Outlier In",ln=True)
-            pdf.set_draw_color(200,200,200)
-            pdf.line(10,pdf.get_y(),200,pdf.get_y())
-            pdf.set_font("Times","",10)
+            pdf.set_font("Times", "B", 11)
+            pdf.cell(60, 8, "PROPNUM / LEASE_NAME")
+            pdf.cell(30, 8, "Begin Ratio")
+            pdf.cell(30, 8, "Final Ratio")
+            pdf.cell(30, 8, "Outlier In", ln=True)
+            pdf.set_draw_color(200, 200, 200)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.set_font("Times", "", 10)
             for _, r in out.iterrows():
                 well_text = f"{r['PROPNUM']}\n{r['LEASE_NAME']}"
-                hl = len(pdf.multi_cell(60,lh,well_text,split_only=True))
-                rh = hl*lh
+                hl = len(pdf.multi_cell(60, lh, well_text, split_only=True))
+                rh = hl * lh
                 x0, y0 = pdf.get_x(), pdf.get_y()
-                pdf.multi_cell(60,lh,well_text)
-                pdf.set_xy(x0+60,y0)
-                pdf.cell(30,rh,f"{r['NRI/WI Ratio Begin']:.3f}")
-                pdf.cell(30,rh,f"{r['NRI/WI Ratio Final']:.3f}")
-                pdf.cell(30,rh,r["Outlier Source"])
+
+                pdf.multi_cell(60, lh, well_text)
+                pdf.set_xy(x0 + 60, y0)
+                pdf.cell(30, rh, f"{r['NRI/WI Ratio Begin']:.3f}")
+                pdf.cell(30, rh, f"{r['NRI/WI Ratio Final']:.3f}")
+                pdf.cell(30, rh, r["Outlier Source"])
                 pdf.ln(rh)
-                pdf.set_draw_color(220,220,220)
-                pdf.line(10,pdf.get_y(),200,pdf.get_y())
+                pdf.set_draw_color(220, 220, 220)
+                pdf.line(10, pdf.get_y(), 200, pdf.get_y())
 
     buf.write(pdf.output(dest="S").encode("latin1"))
     buf.seek(0)
+
 
 # ==== STREAMLIT UI ====
 st.title("Variance Audit Tool")
@@ -380,6 +442,7 @@ st.write("Upload BEGIN and FINAL ‘Oneline’ sheets, select NPV column, then g
 begin_u = st.file_uploader("BEGIN XLSX", type=["xlsx"], key="b")
 final_u = st.file_uploader("FINAL XLSX", type=["xlsx"], key="f")
 npv_col = st.selectbox("NPV column", ["NPV at 9%", "NPV at 10%"])
+
 if "zip" not in st.session_state:
     st.session_state.zip = None
 
@@ -402,12 +465,12 @@ if st.button("Generate Reports"):
 
     for m in MAIN_METRICS + [npv_col]:
         cb, cf = f"{m}_begin", f"{m}_final"
-        if cb in var_df and cf in var_df:
+        if cb in var_df.columns and cf in var_df.columns:
             var_df[f"{m} Variance"] = var_df[cf] - var_df[cb]
 
     expl_df = generate_explanations(var_df, npv_col)
-    neg_df  = identify_negative_npv_wells(var_df, npv_col)
-    nri_df  = calculate_nri_wi_ratio(bdf_s, fdf_s)
+    neg_df = identify_negative_npv_wells(var_df, npv_col)
+    nri_df = calculate_nri_wi_ratio(bdf_s, fdf_s)
 
     xbuf = io.BytesIO()
     generate_excel(var_df, xbuf, npv_col, neg_df, bdf_s, fdf_s, nri_df)
