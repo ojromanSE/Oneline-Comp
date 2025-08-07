@@ -62,10 +62,8 @@ def suffix_columns(df, suffix, ignore=["PROPNUM", "LEASE_NAME"]):
 def identify_negative_npv_wells(var_df, npv_col):
     b_col = f"{npv_col}_begin"
     f_col = f"{npv_col}_final"
-    # If either column is missing, return empty DataFrame
     if b_col not in var_df.columns or f_col not in var_df.columns:
         return var_df.iloc[0:0]
-    # Treat NaNs as zero and build boolean mask
     mask = (var_df[b_col].fillna(0) > 0) & (var_df[f_col].fillna(0) <= 0)
     return var_df.loc[mask]
 
@@ -208,7 +206,8 @@ def add_chart_to_pdf(pdf, fig, title=""):
 
 # ==== EXCEL EXPORT ====
 def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
-    cols = [
+    # desired columns in the summary sheet
+    desired = [
         "Net Total Revenue ($) Variance",
         "Net Operating Expense ($) Variance",
         "Net Capex ($) Variance",
@@ -216,12 +215,17 @@ def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
         "Net Res Gas (MMcf) Variance",
         "Net Res NGL (Mbbl) Variance",
         f"{npv_col} Variance",
-        "Reserve Category Begin", "Reserve Category Final"
+        "Reserve Category Begin",
+        "Reserve Category Final"
     ]
+    # only include those that actually exist
+    cols = [c for c in desired if c in var_df.columns]
+
     summary = (
         var_df[["PROPNUM", "LEASE_NAME"] + cols]
-        .sort_values(f"{npv_col} Variance", ascending=False)
+        .sort_values(f"{npv_col} Variance", ascending=False, errors="ignore")
     )
+
     bset, fset = set(b_df["PROPNUM"]), set(f_df["PROPNUM"])
     added = f_df[f_df["PROPNUM"].isin(fset - bset)].copy()
     removed = b_df[b_df["PROPNUM"].isin(bset - fset)].copy()
@@ -251,7 +255,7 @@ def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
 
         for m in MAIN_METRICS + [npv_col]:
             col = f"{m} Variance"
-            if col in var_df:
+            if col in var_df.columns:
                 tmp = (
                     var_df[["PROPNUM", "LEASE_NAME", col]]
                     .dropna()
@@ -326,14 +330,17 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
         pdf.cell(0, 10, f"Variance Summary for {cat}", ln=True, align="C")
         pdf.ln(2)
         pdf.set_font("Times", "", 11)
-        lines = [
-            f"Net Oil Change: {subgroup['Net Res Oil (Mbbl) Variance'].sum():,.2f} Mbbl",
-            f"Net Gas Change: {subgroup['Net Res Gas (MMcf) Variance'].sum():,.2f} MMcf",
-            f"{npv_col} Change: ${subgroup[f'{npv_col} Variance'].sum():,.0f}"
-        ]
+        lines = []
+        if "Net Res Oil (Mbbl) Variance" in subgroup:
+            lines.append(f"Net Oil Change: {subgroup['Net Res Oil (Mbbl) Variance'].sum():,.2f} Mbbl")
+        if "Net Res Gas (MMcf) Variance" in subgroup:
+            lines.append(f"Net Gas Change: {subgroup['Net Res Gas (MMcf) Variance'].sum():,.2f} MMcf")
+        if f"{npv_col} Variance" in subgroup:
+            lines.append(f"{npv_col} Change: ${subgroup[f'{npv_col} Variance'].sum():,.0f}")
         for L in lines:
             pdf.cell(0, 8, L, ln=True)
         pdf.ln(4)
+
         pdf.set_font("Times", "B", 11)
         pdf.cell(pw, 8, "PROPNUM / LEASE_NAME")
         pdf.cell(cw, 8, "Begin Cat")
@@ -343,7 +350,8 @@ def generate_pdf(var_df, buf, npv_col, expl_df, nri_df):
         pdf.set_draw_color(200, 200, 200)
         pdf.line(10, pdf.get_y(), 200, pdf.get_y())
         pdf.set_font("Times", "", 10)
-        if not subgroup.empty:
+
+        if not subgroup.empty and f"{npv_col} Variance" in subgroup:
             top5 = subgroup.loc[
                 subgroup[f"{npv_col} Variance"].abs().nlargest(5).index
             ]
