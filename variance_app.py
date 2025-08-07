@@ -7,7 +7,6 @@ import zipfile
 import os
 import tempfile
 from fpdf import FPDF
-import matplotlib.ticker as mtick
 from matplotlib.ticker import FuncFormatter
 import matplotlib as mpl
 
@@ -206,7 +205,7 @@ def add_chart_to_pdf(pdf, fig, title=""):
 
 # ==== EXCEL EXPORT ====
 def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
-    # desired columns in the summary sheet
+    # Desired summary columns (only include those that exist)
     desired = [
         "Net Total Revenue ($) Variance",
         "Net Operating Expense ($) Variance",
@@ -218,13 +217,17 @@ def generate_excel(var_df, buf, npv_col, neg_df, b_df, f_df, nri_df):
         "Reserve Category Begin",
         "Reserve Category Final"
     ]
-    # only include those that actually exist
     cols = [c for c in desired if c in var_df.columns]
 
-    summary = (
-        var_df[["PROPNUM", "LEASE_NAME"] + cols]
-        .sort_values(f"{npv_col} Variance", ascending=False, errors="ignore")
-    )
+    # Build the subset
+    subset = var_df[["PROPNUM", "LEASE_NAME"] + cols]
+
+    # Only sort if the variance column exists
+    variance_col = f"{npv_col} Variance"
+    if variance_col in subset.columns:
+        summary = subset.sort_values(variance_col, ascending=False)
+    else:
+        summary = subset
 
     bset, fset = set(b_df["PROPNUM"]), set(f_df["PROPNUM"])
     added = f_df[f_df["PROPNUM"].isin(fset - bset)].copy()
